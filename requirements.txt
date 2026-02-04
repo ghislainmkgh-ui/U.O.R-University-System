@@ -1,0 +1,7 @@
+customtkinter
+mysql-connector-python
+python-dotenv
+Pillow
+numpy
+pandas
+requests

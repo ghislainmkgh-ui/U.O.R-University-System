@@ -1,7 +1,10 @@
-customtkinter
-mysql-connector-python
-python-dotenv
-Pillow
-numpy
-pandas
-requests
+customtkinter>=5.2.0
+mysql-connector-python>=8.0.33
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+numpy>=1.24.0
+pandas>=2.0.0
+requests>=2.31.0
+bcrypt>=4.0.1
+pyserial>=3.5
+matplotlib>=3.7.0

@@ -24,6 +24,9 @@ class LoginWindow(ctk.CTk):
                                        fg_color="#4e73df", hover_color="#2e59d9")
         self.btn_login.pack(pady=30)
 
+        self.status_label = ctk.CTkLabel(self, text="", text_color="#e74a3b")
+        self.status_label.pack(pady=5)
+
     def verifier_connexion(self):
         # Ici, on compare avec la table 'Administrateur' du MLD
         user = self.username.get()
@@ -31,7 +34,11 @@ class LoginWindow(ctk.CTk):
         
         # Logique de vérification (exemple simplifié)
         if user == "admin" and pwd == "admin123": # À lier avec AdminDAO
-            self.destroy() # Ferme la fenêtre de login
-            self.on_success() # Lance le Dashboard
+            self.status_label.configure(text="Accès autorisé : Connexion réussie.", text_color="#1cc88a")
+            self.after(300, self._proceed_after_success)
         else:
-            print("Accès refusé : Identifiants invalides.")
+            self.status_label.configure(text="Accès refusé : Identifiants invalides.", text_color="#e74a3b")
+
+    def _proceed_after_success(self):
+        self.destroy() # Ferme la fenêtre de login
+        self.on_success() # Lance le Dashboard

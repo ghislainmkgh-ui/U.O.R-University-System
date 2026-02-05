@@ -2,6 +2,7 @@
 import logging
 from enum import Enum
 from datetime import datetime
+import numpy as np
 from core.database.connection import DatabaseConnection
 from core.models.access_log import AccessStatus, AccessLog
 from app.services.auth.authentication_service import AuthenticationService
@@ -55,9 +56,14 @@ class AccessController:
             result["student_id"] = student['id']
             
             # 2. Vérifier le visage
-            student_finance = self.finance_service.get_student_finance(student['id'])
-            if student_finance and student_finance.get('face_encoding'):
-                if not self.face_service.verify_face(face_image_path, student_finance['face_encoding']):
+            student_face = self.db.execute_query(
+                "SELECT face_encoding FROM student WHERE id = %s",
+                (student['id'],)
+            )
+            if student_face and student_face[0].get('face_encoding'):
+                stored_bytes = student_face[0]['face_encoding']
+                stored_encoding = np.frombuffer(stored_bytes, dtype=np.float64)
+                if not self.face_service.verify_face(face_image_path, stored_encoding):
                     result["reason"] = "Face recognition failed"
                     self._log_access(student['id'], access_point, AccessStatus.DENIED_FACE)
                     return result

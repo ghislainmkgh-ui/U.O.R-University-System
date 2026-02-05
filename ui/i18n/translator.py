@@ -2,12 +2,20 @@
 
 TRANSLATIONS = {
     "FR": {
+        # Langue et plateforme
+        "language": "Langue",
+        "exam_access_platform": "Plateforme d'Accès aux Examens",
+        
         # Navigation
         "dashboard": "Tableau de Bord",
         "students": "Étudiants",
         "finance": "Finances",
         "access_logs": "Logs d'Accès",
+        "reports": "Rapports",
         "settings": "Paramètres",
+        "theme": "Thème",
+        "light_theme": "Clair",
+        "dark_theme": "Sombre",
         
         # Authentification
         "login": "Connexion",
@@ -19,25 +27,50 @@ TRANSLATIONS = {
         "access_granted": "Accès Autorisé",
         "access_denied": "Accès Refusé",
         
+        # Dashboard
+        "total_students": "Total Étudiants",
+        "eligible": "Éligibles",
+        "non_eligible": "Non Éligibles",
+        "recent_activity": "Activité Récente",
+        "access_attempt": "Tentative d'Accès",
+        "granted": "Autorisé",
+        "denied": "Refusé",
+        
         # Étudiants
         "student_number": "Numéro d'Étudiant",
         "firstname": "Prénom",
         "lastname": "Nom",
         "email": "Email",
+        "faculty": "Faculté",
+        "department": "Département",
         "promotion": "Promotion",
-        "eligible": "Éligible",
-        "not_eligible": "Non Éligible",
+        "status": "Statut",
+        "active": "Actif",
+        "inactive": "Inactif",
         
         # Finances
         "amount_paid": "Montant Payé",
         "threshold": "Seuil",
         "remaining": "Restant",
         "payment": "Paiement",
+        "payment_date": "Date de Paiement",
         "eligible_students": "Étudiants Éligibles",
         "non_eligible_students": "Étudiants Non Éligibles",
+        "total_collected": "Total Collecté",
+        
+        # Logs
+        "access_point": "Point d'Accès",
+        "timestamp": "Date/Heure",
+        "password_check": "Vérification Mot de Passe",
+        "face_recognition": "Reconnaissance Faciale",
+        "finance_check": "Vérification Finances",
+        "verified": "Vérifiée",
+        "failed": "Échouée",
         
         # Boutons
         "add": "Ajouter",
+        "add_student": "Ajouter Étudiant",
+        "add_payment": "Ajouter Paiement",
         "edit": "Modifier",
         "delete": "Supprimer",
         "save": "Enregistrer",
@@ -45,6 +78,9 @@ TRANSLATIONS = {
         "submit": "Soumettre",
         "view": "Voir",
         "search": "Rechercher",
+        "export": "Exporter",
+        "import": "Importer",
+        "refresh": "Actualiser",
         
         # Messages
         "loading": "Chargement...",
@@ -53,14 +89,23 @@ TRANSLATIONS = {
         "warning": "Avertissement",
         "no_data": "Aucune donnée",
         "invalid_input": "Entrée invalide",
+        "confirm_delete": "Êtes-vous sûr?",
     },
     "EN": {
+        # Language and platform
+        "language": "Language",
+        "exam_access_platform": "Exam Access Platform",
+        
         # Navigation
         "dashboard": "Dashboard",
         "students": "Students",
         "finance": "Finance",
         "access_logs": "Access Logs",
+        "reports": "Reports",
         "settings": "Settings",
+        "theme": "Theme",
+        "light_theme": "Light",
+        "dark_theme": "Dark",
         
         # Authentication
         "login": "Login",
@@ -72,25 +117,50 @@ TRANSLATIONS = {
         "access_granted": "Access Granted",
         "access_denied": "Access Denied",
         
+        # Dashboard
+        "total_students": "Total Students",
+        "eligible": "Eligible",
+        "non_eligible": "Non-Eligible",
+        "recent_activity": "Recent Activity",
+        "access_attempt": "Access Attempt",
+        "granted": "Granted",
+        "denied": "Denied",
+        
         # Students
         "student_number": "Student Number",
         "firstname": "First Name",
         "lastname": "Last Name",
         "email": "Email",
+        "faculty": "Faculty",
+        "department": "Department",
         "promotion": "Promotion",
-        "eligible": "Eligible",
-        "not_eligible": "Not Eligible",
+        "status": "Status",
+        "active": "Active",
+        "inactive": "Inactive",
         
         # Finance
         "amount_paid": "Amount Paid",
         "threshold": "Threshold",
         "remaining": "Remaining",
         "payment": "Payment",
+        "payment_date": "Payment Date",
         "eligible_students": "Eligible Students",
         "non_eligible_students": "Non-Eligible Students",
+        "total_collected": "Total Collected",
+        
+        # Logs
+        "access_point": "Access Point",
+        "timestamp": "Date/Time",
+        "password_check": "Password Check",
+        "face_recognition": "Face Recognition",
+        "finance_check": "Finance Check",
+        "verified": "Verified",
+        "failed": "Failed",
         
         # Buttons
         "add": "Add",
+        "add_student": "Add Student",
+        "add_payment": "Add Payment",
         "edit": "Edit",
         "delete": "Delete",
         "save": "Save",
@@ -98,6 +168,9 @@ TRANSLATIONS = {
         "submit": "Submit",
         "view": "View",
         "search": "Search",
+        "export": "Export",
+        "import": "Import",
+        "refresh": "Refresh",
         
         # Messages
         "loading": "Loading...",
@@ -106,6 +179,7 @@ TRANSLATIONS = {
         "warning": "Warning",
         "no_data": "No data",
         "invalid_input": "Invalid input",
+        "confirm_delete": "Are you sure?",
     }
 }
 

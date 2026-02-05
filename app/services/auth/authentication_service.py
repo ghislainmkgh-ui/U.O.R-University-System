@@ -39,14 +39,15 @@ class AuthenticationService:
             
             # Insérer en base de données
             query = """
-                INSERT INTO Student (student_number, firstname, lastname, email, promotion_id, password_hash)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO student (student_number, firstname, lastname, email, phone_number, promotion_id, password_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """
             params = (
                 student.student_number,
                 student.firstname,
                 student.lastname,
                 student.email,
+                student.phone_number,
                 student.promotion_id,
                 password_hash
             )
@@ -72,7 +73,7 @@ class AuthenticationService:
         """
         try:
             # Récupérer l'étudiant de la base
-            query = "SELECT * FROM Student WHERE student_number = %s"
+            query = "SELECT * FROM student WHERE student_number = %s"
             results = self.db.execute_query(query, (student_number,))
             
             if not results:
@@ -122,7 +123,7 @@ class AuthenticationService:
             new_hash = self.password_hasher.hash_password(new_password)
             
             # Mettre à jour en base
-            query = "UPDATE Student SET password_hash = %s WHERE student_number = %s"
+            query = "UPDATE student SET password_hash = %s WHERE student_number = %s"
             self.db.execute_update(query, (new_hash, student_number))
             
             logger.info(f"Password changed successfully for {student_number}")
@@ -131,3 +132,57 @@ class AuthenticationService:
         except Exception as e:
             logger.error(f"Error changing password: {e}")
             return False
+
+    def register_student_with_face(self, student: Student, password: str, face_encoding: bytes) -> int:
+        """
+        Enregistre un nouvel étudiant avec encodage facial
+
+        Args:
+            student: Objet Student
+            password: Mot de passe en clair
+            face_encoding: Encodage facial en bytes
+
+        Returns:
+            ID de l'étudiant si succès, sinon 0
+        """
+        try:
+            valid, msg = self.validators.validate_numeric_password(password)
+            if not valid:
+                logger.warning(f"Invalid password for student {student.student_number}: {msg}")
+                return 0
+
+            password_hash = self.password_hasher.hash_password(password)
+
+            query = """
+                INSERT INTO student (
+                    student_number, firstname, lastname, email, phone_number, promotion_id, password_hash, face_encoding
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            params = (
+                student.student_number,
+                student.firstname,
+                student.lastname,
+                student.email,
+                student.phone_number,
+                student.promotion_id,
+                password_hash,
+                face_encoding
+            )
+
+            self.db.execute_update(query, params)
+
+            result = self.db.execute_query(
+                "SELECT id FROM student WHERE student_number = %s",
+                (student.student_number,)
+            )
+            if not result:
+                logger.error("Student inserted but ID not found")
+                return 0
+
+            student_id = result[0]["id"]
+            logger.info(f"Student {student.student_number} registered with face encoding")
+            return student_id
+
+        except Exception as e:
+            logger.error(f"Error registering student with face: {e}")
+            return 0

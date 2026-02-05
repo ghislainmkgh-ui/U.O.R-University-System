@@ -6,13 +6,14 @@ class Student(BaseModel):
     """Modèle pour les Étudiants"""
     
     def __init__(self, student_number: str, firstname: str, lastname: str, 
-                 email: str, promotion_id: int):
+                 email: str, promotion_id: int, phone_number: str = None):
         super().__init__()
         self.id: int = None
         self.student_number: str = student_number
         self.firstname: str = firstname
         self.lastname: str = lastname
         self.email: str = email
+        self.phone_number: str = phone_number
         self.promotion_id: int = promotion_id
         self.password_hash: str = None
         self.face_encoding: bytes = None

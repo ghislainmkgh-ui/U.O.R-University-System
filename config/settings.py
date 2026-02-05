@@ -24,10 +24,15 @@ EMAIL_SERVICE = os.getenv("EMAIL_SERVICE", "gmail")  # ou autre
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 
-# WhatsApp (Twilio ou autre)
+# WhatsApp (Twilio)
 WHATSAPP_ACCOUNT_SID = os.getenv("WHATSAPP_ACCOUNT_SID", "")
 WHATSAPP_AUTH_TOKEN = os.getenv("WHATSAPP_AUTH_TOKEN", "")
 WHATSAPP_FROM = os.getenv("WHATSAPP_FROM", "")
+
+# WhatsApp Templates (optional - for pre-approved content Messages)
+WHATSAPP_TEMPLATE_ACCESS_CODE = os.getenv("WHATSAPP_TEMPLATE_ACCESS_CODE", "")
+WHATSAPP_TEMPLATE_THRESHOLD_ALERT = os.getenv("WHATSAPP_TEMPLATE_THRESHOLD_ALERT", "")
+WHATSAPP_USE_TEMPLATES = os.getenv("WHATSAPP_USE_TEMPLATES", "False").lower() == "true"
 
 # Arduino
 ARDUINO_PORT = os.getenv("ARDUINO_PORT", "COM3")

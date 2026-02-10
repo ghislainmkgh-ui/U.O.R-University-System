@@ -1,5 +1,7 @@
 """Service d'authentification principal"""
 import logging
+import secrets
+from typing import Optional
 from core.security.password_hasher import PasswordHasher
 from core.security.validators import Validators
 from core.models.student import Student
@@ -133,7 +135,11 @@ class AuthenticationService:
             logger.error(f"Error changing password: {e}")
             return False
 
-    def register_student_with_face(self, student: Student, password: str, face_encoding: bytes) -> int:
+    def _generate_placeholder_password(self) -> str:
+        """Génère un mot de passe temporaire non communiqué"""
+        return secrets.token_urlsafe(24)
+
+    def register_student_with_face(self, student: Student, password: Optional[str], face_encoding: bytes) -> int:
         """
         Enregistre un nouvel étudiant avec encodage facial
 
@@ -146,17 +152,22 @@ class AuthenticationService:
             ID de l'étudiant si succès, sinon 0
         """
         try:
-            valid, msg = self.validators.validate_numeric_password(password)
-            if not valid:
-                logger.warning(f"Invalid password for student {student.student_number}: {msg}")
-                return 0
+            if password:
+                valid, msg = self.validators.validate_numeric_password(password)
+                if not valid:
+                    logger.warning(f"Invalid password for student {student.student_number}: {msg}")
+                    return 0
+                password_to_hash = password
+            else:
+                password_to_hash = self._generate_placeholder_password()
 
-            password_hash = self.password_hasher.hash_password(password)
+            password_hash = self.password_hasher.hash_password(password_to_hash)
 
             query = """
                 INSERT INTO student (
-                    student_number, firstname, lastname, email, phone_number, promotion_id, password_hash, face_encoding
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    student_number, firstname, lastname, email, phone_number, promotion_id,
+                    passport_photo_path, passport_photo_blob, password_hash, face_encoding
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             params = (
                 student.student_number,
@@ -165,6 +176,8 @@ class AuthenticationService:
                 student.email,
                 student.phone_number,
                 student.promotion_id,
+                student.passport_photo_path,
+                student.passport_photo_blob,
                 password_hash,
                 face_encoding
             )

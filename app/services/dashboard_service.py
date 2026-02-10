@@ -85,7 +85,7 @@ class DashboardService:
             cursor.execute("""
                 SELECT COUNT(*)
                 FROM access_log
-                WHERE status = 'granted' AND DATE(created_at) = CURDATE()
+                WHERE status = 'GRANTED' AND DATE(created_at) = CURDATE()
             """)
             result = cursor.fetchone()
             cursor.close()
@@ -105,7 +105,7 @@ class DashboardService:
             cursor.execute("""
                 SELECT COUNT(*)
                 FROM access_log
-                WHERE status = 'denied' AND DATE(created_at) = CURDATE()
+                WHERE status <> 'GRANTED' AND DATE(created_at) = CURDATE()
             """)
             result = cursor.fetchone()
             cursor.close()
@@ -237,7 +237,7 @@ class DashboardService:
         try:
             db = self.db_connection.get_connection()
             cursor = db.cursor()
-            
+
             # Jamais payé
             cursor.execute("""
                 SELECT COUNT(DISTINCT pf.student_id)
@@ -245,7 +245,7 @@ class DashboardService:
                 WHERE pf.amount_paid = 0
             """)
             never_paid = cursor.fetchone()[0]
-            
+
             # Partiellement payé
             cursor.execute("""
                 SELECT COUNT(DISTINCT pf.student_id)
@@ -253,7 +253,7 @@ class DashboardService:
                 WHERE pf.amount_paid > 0 AND pf.is_eligible = 0
             """)
             partial_paid = cursor.fetchone()[0]
-            
+
             # Éligible
             cursor.execute("""
                 SELECT COUNT(DISTINCT pf.student_id)
@@ -261,10 +261,10 @@ class DashboardService:
                 WHERE pf.is_eligible = 1
             """)
             eligible = cursor.fetchone()[0]
-            
+
             cursor.close()
             db.close()
-            
+
             return {
                 "never_paid": never_paid,
                 "partial_paid": partial_paid,
@@ -273,3 +273,100 @@ class DashboardService:
         except Exception as e:
             logger.error(f"Erreur payment_status: {e}")
             return {"never_paid": 0, "partial_paid": 0, "eligible": 0}
+
+    def get_students_finance_overview(self, limit: int = 200) -> list:
+        """Liste des étudiants avec synthèse financière et photo"""
+        if not self.db_connection:
+            return []
+        try:
+            db = self.db_connection.get_connection()
+            cursor = db.cursor(dictionary=True)
+            cursor.execute(f"""
+                SELECT
+                    s.student_number,
+                    s.firstname,
+                    s.lastname,
+                    s.passport_photo_path,
+                    s.passport_photo_blob,
+                    fp.amount_paid,
+                    fp.threshold_required,
+                    fp.last_payment_date,
+                    fp.is_eligible
+                FROM student s
+                LEFT JOIN finance_profile fp ON fp.student_id = s.id
+                WHERE s.is_active = 1
+                ORDER BY s.lastname ASC, s.firstname ASC, s.student_number ASC
+                LIMIT {limit}
+            """)
+            rows = cursor.fetchall() or []
+            cursor.close()
+            db.close()
+            return rows
+        except Exception as e:
+            logger.error(f"Erreur finance_overview: {e}")
+            return []
+
+    def get_access_logs_with_students(self, limit: int = 200) -> list:
+        """Liste des logs d'accès avec photo étudiant"""
+        if not self.db_connection:
+            return []
+        try:
+            db = self.db_connection.get_connection()
+            cursor = db.cursor(dictionary=True)
+            cursor.execute(f"""
+                SELECT
+                    s.student_number,
+                    s.firstname,
+                    s.lastname,
+                    s.passport_photo_path,
+                    s.passport_photo_blob,
+                    al.access_point,
+                    al.status,
+                    al.password_validated,
+                    al.face_validated,
+                    al.finance_validated,
+                    al.created_at
+                FROM access_log al
+                JOIN student s ON al.student_id = s.id
+                ORDER BY al.created_at DESC
+                LIMIT {limit}
+            """)
+            rows = cursor.fetchall() or []
+            cursor.close()
+            db.close()
+            return rows
+        except Exception as e:
+            logger.error(f"Erreur access_logs: {e}")
+            return []
+
+    def get_faculty_stats_with_photos(self) -> list:
+        """Stats par faculté/département avec photo échantillon"""
+        if not self.db_connection:
+            return []
+        try:
+            db = self.db_connection.get_connection()
+            cursor = db.cursor(dictionary=True)
+            cursor.execute("""
+                SELECT 
+                    f.name as faculty_name,
+                    d.name as department_name,
+                    COUNT(DISTINCT e.id) as total_students,
+                    SUM(CASE WHEN pf.is_eligible = 1 THEN 1 ELSE 0 END) as eligible_students,
+                    COALESCE(SUM(pf.amount_paid), 0) as revenue,
+                    MAX(e.passport_photo_path) as passport_photo_path,
+                    MAX(e.passport_photo_blob) as passport_photo_blob
+                FROM faculty f
+                LEFT JOIN department d ON f.id = d.faculty_id
+                LEFT JOIN promotion p ON d.id = p.department_id
+                LEFT JOIN student e ON p.id = e.promotion_id AND e.is_active = 1
+                LEFT JOIN finance_profile pf ON e.id = pf.student_id
+                GROUP BY f.id, f.name, d.id, d.name
+                ORDER BY f.name, d.name
+            """)
+            rows = cursor.fetchall() or []
+            cursor.close()
+            db.close()
+            return rows
+        except Exception as e:
+            logger.error(f"Erreur faculty_stats_photos: {e}")
+            return []

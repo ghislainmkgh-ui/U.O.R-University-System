@@ -5,6 +5,7 @@ Respecte les principes: SRP, OCP, LSP, ISP, DIP
 import logging
 import os
 import numpy as np
+from PIL import Image, ImageStat
 from pathlib import Path
 from typing import Optional
 from app.services.auth.face_recognition_interface import IFaceRecognitionService
@@ -97,8 +98,9 @@ class FaceRecognitionService(IFaceRecognitionService):
             if len(face_encodings) > self._config.MAX_FACES_PER_IMAGE:
                 logger.warning(
                     f"Multiple faces detected ({len(face_encodings)}) for student {student_id}. "
-                    f"Only the first face will be used."
+                    f"Expected max: {self._config.MAX_FACES_PER_IMAGE}."
                 )
+                return None
             
             # Extraction du premier visage
             face_encoding = face_encodings[0]
@@ -201,6 +203,60 @@ class FaceRecognitionService(IFaceRecognitionService):
         except Exception as e:
             logger.error(f"Unexpected error during face verification: {e}")
             return False
+
+    def validate_passport_photo(self, image_path: str) -> tuple[bool, str]:
+        """Valide la qualité d'une photo passeport (centrage, luminosité, netteté)."""
+        try:
+            self._validate_service_availability()
+            self._validate_image_path(image_path)
+
+            image = Image.open(image_path)
+            width, height = image.size
+
+            # Luminosité & contraste simples
+            gray = image.convert("L")
+            stats = ImageStat.Stat(gray)
+            brightness = stats.mean[0]
+            contrast = stats.stddev[0]
+            if brightness < 60 or brightness > 200:
+                return False, "Photo trop sombre ou trop claire. Utilisez un bon éclairage."
+            if contrast < 20:
+                return False, "Contraste trop faible. Photo floue ou mal éclairée."
+
+            # Netteté (variance du Laplacien approximé)
+            gray_np = np.array(gray, dtype=np.float32)
+            laplacian = (
+                -1 * gray_np[:-2, 1:-1]
+                -1 * gray_np[2:, 1:-1]
+                -1 * gray_np[1:-1, :-2]
+                -1 * gray_np[1:-1, 2:]
+                +4 * gray_np[1:-1, 1:-1]
+            )
+            sharpness = laplacian.var()
+            if sharpness < 50:
+                return False, "Photo trop floue. Utilisez une image nette et bien cadrée."
+
+            # Centrage visage
+            image_np = np.array(image)
+            face_locations = self._face_recognition.face_locations(image_np)
+            if not face_locations:
+                return False, "Aucun visage détecté sur la photo."
+            if len(face_locations) > 1:
+                return False, "Plusieurs visages détectés. Utilisez une photo individuelle."
+
+            top, right, bottom, left = face_locations[0]
+            face_center_x = (left + right) / 2
+            face_center_y = (top + bottom) / 2
+            img_center_x = width / 2
+            img_center_y = height / 2
+
+            if abs(face_center_x - img_center_x) > width * 0.15 or abs(face_center_y - img_center_y) > height * 0.15:
+                return False, "Visage mal centré. Utilisez une photo passeport bien cadrée."
+
+            return True, "OK"
+        except Exception as e:
+            logger.error(f"Photo quality validation error: {e}")
+            return False, "Impossible de valider la qualité de la photo."
     
     # ============= Méthodes de validation privées (SRP) =============
     

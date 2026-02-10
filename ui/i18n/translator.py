@@ -12,6 +12,7 @@ TRANSLATIONS = {
         "finance": "Finances",
         "access_logs": "Logs d'Accès",
         "reports": "Rapports",
+        "academic_years": "Années Acad.",
         "settings": "Paramètres",
         "theme": "Thème",
         "light_theme": "Clair",
@@ -35,6 +36,9 @@ TRANSLATIONS = {
         "access_attempt": "Tentative d'Accès",
         "granted": "Autorisé",
         "denied": "Refusé",
+        "overview": "Vue d'ensemble",
+        "dashboard_title": "Dashboard",
+        "dashboard_subtitle": "Vue d'ensemble",
         
         # Étudiants
         "student_number": "Numéro d'Étudiant",
@@ -78,6 +82,7 @@ TRANSLATIONS = {
         "submit": "Soumettre",
         "view": "Voir",
         "search": "Rechercher",
+        "search_placeholder": "Nom, ID ou email...",
         "export": "Exporter",
         "import": "Importer",
         "refresh": "Actualiser",
@@ -88,8 +93,20 @@ TRANSLATIONS = {
         "error": "Erreur",
         "warning": "Avertissement",
         "no_data": "Aucune donnée",
+        "no_students": "Aucun étudiant trouvé.",
         "invalid_input": "Entrée invalide",
         "confirm_delete": "Êtes-vous sûr?",
+
+        "students_title": "Gestion des Étudiants",
+        "students_subtitle": "Gestion et suivi des étudiants",
+        "finance_title": "Gestion Financière",
+        "finance_subtitle": "Suivi des paiements et seuils",
+        "access_logs_title": "Historique d'Accès",
+        "access_logs_subtitle": "Suivi des tentatives d'accès",
+        "reports_title": "Rapports et Statistiques",
+        "reports_subtitle": "Analyse par faculté et performance",
+        "academic_years_title": "Années Académiques",
+        "academic_years_subtitle": "Gestion des seuils financiers et périodes d'examens",
     },
     "EN": {
         # Language and platform
@@ -102,6 +119,7 @@ TRANSLATIONS = {
         "finance": "Finance",
         "access_logs": "Access Logs",
         "reports": "Reports",
+        "academic_years": "Academic Years",
         "settings": "Settings",
         "theme": "Theme",
         "light_theme": "Light",
@@ -125,6 +143,9 @@ TRANSLATIONS = {
         "access_attempt": "Access Attempt",
         "granted": "Granted",
         "denied": "Denied",
+        "overview": "Overview",
+        "dashboard_title": "Dashboard",
+        "dashboard_subtitle": "Overview",
         
         # Students
         "student_number": "Student Number",
@@ -168,6 +189,7 @@ TRANSLATIONS = {
         "submit": "Submit",
         "view": "View",
         "search": "Search",
+        "search_placeholder": "Name, ID or email...",
         "export": "Export",
         "import": "Import",
         "refresh": "Refresh",
@@ -178,8 +200,20 @@ TRANSLATIONS = {
         "error": "Error",
         "warning": "Warning",
         "no_data": "No data",
+        "no_students": "No students found.",
         "invalid_input": "Invalid input",
         "confirm_delete": "Are you sure?",
+
+        "students_title": "Student Management",
+        "students_subtitle": "Manage and track students",
+        "finance_title": "Finance Management",
+        "finance_subtitle": "Payments and thresholds monitoring",
+        "access_logs_title": "Access History",
+        "access_logs_subtitle": "Track access attempts",
+        "reports_title": "Reports and Statistics",
+        "reports_subtitle": "Analysis by faculty and performance",
+        "academic_years_title": "Academic Years",
+        "academic_years_subtitle": "Manage thresholds and exam periods",
     }
 }
 

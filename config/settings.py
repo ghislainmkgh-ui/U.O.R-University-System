@@ -19,6 +19,9 @@ PASSWORD_MIN_LENGTH = 6  # 6 chiffres minimum
 # Seuils financiers
 FINANCIAL_THRESHOLD = float(os.getenv("FINANCIAL_THRESHOLD", 0.0))
 
+# Taux de conversion FC -> USD pour affichage
+USD_EXCHANGE_RATE_FC = float(os.getenv("USD_EXCHANGE_RATE_FC", 2700.0))
+
 # Email
 EMAIL_SERVICE = os.getenv("EMAIL_SERVICE", "gmail")  # ou autre
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")

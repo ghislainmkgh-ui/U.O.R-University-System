@@ -3,7 +3,7 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from config.settings import EMAIL_SERVICE, EMAIL_ADDRESS, EMAIL_PASSWORD, WHATSAPP_ACCOUNT_SID, WHATSAPP_AUTH_TOKEN, WHATSAPP_FROM
+from config.settings import EMAIL_SERVICE, EMAIL_ADDRESS, EMAIL_PASSWORD, WHATSAPP_ACCOUNT_SID, WHATSAPP_AUTH_TOKEN, WHATSAPP_FROM, USD_EXCHANGE_RATE_FC
 
 logger = logging.getLogger(__name__)
 
@@ -18,26 +18,47 @@ class NotificationService:
         self.whatsapp_token = WHATSAPP_AUTH_TOKEN
         self.whatsapp_from = WHATSAPP_FROM
     
-    def send_payment_notification(self, student_email: str, student_name: str,
-                                 amount_paid: float, remaining_amount: float,
-                                 threshold: float) -> bool:
-        """Envoie une notification de paiement par email"""
+    def send_payment_notification(self, student_email: str, student_phone: str,
+                                 student_name: str, amount_paid: float,
+                                 remaining_amount: float, final_fee: float) -> bool:
+        """Envoie une notification de paiement par email et WhatsApp"""
         try:
+            def to_usd(amount_fc: float) -> float:
+                return amount_fc / float(USD_EXCHANGE_RATE_FC or 1)
+
+            amount_paid_usd = to_usd(amount_paid)
+            remaining_usd = to_usd(max(remaining_amount, 0))
+            final_fee_usd = to_usd(final_fee)
+
+            completion_msg = ""
+            if remaining_amount <= 0:
+                completion_msg = "\n\nFélicitations! Vous avez fini les frais académiques."
+
             subject = "Notification de Paiement - U.O.R"
             body = f"""
 Bonjour {student_name},
 
 Votre paiement a été reçu avec succès.
 
-Montant payé: {amount_paid:,.0f} FC
-Seuil requis: {threshold:,.0f} FC
-Montant restant: {remaining_amount:,.0f} FC
+Montant payé (cumul): ${amount_paid_usd:,.2f}
+Total des frais académiques: ${final_fee_usd:,.2f}
+Montant restant: ${remaining_usd:,.2f}{completion_msg}
 
 Cordialement,
 U.O.R - Système de Contrôle d'Accès
             """.strip()
-            
-            return self._send_email(student_email, subject, body)
+
+            whatsapp_msg = (
+                f"Bonjour {student_name}, paiement reçu. "
+                f"Payé: ${amount_paid_usd:,.2f}, "
+                f"reste: ${remaining_usd:,.2f}."
+            )
+            if remaining_amount <= 0:
+                whatsapp_msg += " Félicitations! Vous avez fini les frais académiques."
+
+            email_ok = self._send_email(student_email, subject, body)
+            whatsapp_ok = self._send_whatsapp(student_phone, whatsapp_msg)
+            return email_ok or whatsapp_ok
             
         except Exception as e:
             logger.error(f"Error preparing payment notification: {e}")
@@ -109,14 +130,20 @@ U.O.R - Système de Contrôle d'Accès
                                           new_threshold: float) -> bool:
         """Notifie l'étudiant du changement de seuil financier"""
         try:
+            def to_usd(amount_fc: float) -> float:
+                return amount_fc / float(USD_EXCHANGE_RATE_FC or 1)
+
+            old_usd = to_usd(old_threshold)
+            new_usd = to_usd(new_threshold)
+
             subject = "Mise à jour du seuil financier - Action requise - U.O.R"
             body = f"""
 Bonjour {student_name},
 
 Le seuil financier pour l'accès aux examens a été mis à jour.
 
-Ancien seuil: {old_threshold:,.0f} FC
-Nouveau seuil: {new_threshold:,.0f} FC
+Ancien seuil: ${old_usd:,.2f}
+Nouveau seuil: ${new_usd:,.2f}
 
 IMPORTANT: Si vous aviez un code d'accès temporaire (paiement partiel), celui-ci a été invalidé. 
 Veuillez effectuer un nouveau paiement pour atteindre le nouveau seuil et obtenir un code valide.
@@ -127,7 +154,7 @@ Cordialement,
 U.O.R - Système de Contrôle d'Accès
             """.strip()
             
-            whatsapp_msg = f"Bonjour {student_name}, le seuil financier a changé de {old_threshold:,.0f} FC à {new_threshold:,.0f} FC. Votre code temporaire a été invalidé si applicable."
+            whatsapp_msg = f"Bonjour {student_name}, le seuil financier a changé de ${old_usd:,.2f} à ${new_usd:,.2f}. Votre code temporaire a été invalidé si applicable."
             
             email_ok = self._send_email(student_email, subject, body)
             whatsapp_ok = self._send_whatsapp(student_phone, whatsapp_msg)

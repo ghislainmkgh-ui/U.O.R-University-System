@@ -8,6 +8,7 @@ from core.database.connection import DatabaseConnection
 from app.services.finance.academic_year_service import AcademicYearService
 from app.services.integration.notification_service import NotificationService
 from app.services.auth.authentication_service import AuthenticationService
+from config.settings import USD_EXCHANGE_RATE_FC
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +36,29 @@ class FinanceService:
         """Crée un profil financier initial pour un étudiant"""
         try:
             active_year = self.academic_service.get_active_year()
+
+            # Récupérer frais par promotion
+            promo_fee_fc = Decimal("0")
+            student_row = self.db.execute_query(
+                """
+                SELECT p.fee_usd
+                FROM student s
+                JOIN promotion p ON s.promotion_id = p.id
+                WHERE s.id = %s
+                """,
+                (student_id,)
+            )
+            if student_row and student_row[0].get('fee_usd'):
+                promo_fee_usd = Decimal(str(student_row[0].get('fee_usd')))
+                promo_fee_fc = promo_fee_usd * Decimal(str(USD_EXCHANGE_RATE_FC))
+
             if active_year:
                 threshold_amount = Decimal(str(active_year.get('threshold_amount') or 0))
-                final_fee = Decimal(str(active_year.get('final_fee') or 0))
-                academic_year_id = active_year.get('id')
+                final_fee = promo_fee_fc if promo_fee_fc > 0 else Decimal(str(active_year.get('final_fee') or 0))
+                academic_year_id = active_year.get('academic_year_id') or active_year.get('id')
             else:
-                threshold_amount = Decimal(str(threshold_required or 0))
-                final_fee = Decimal(str(threshold_required or 0))
+                threshold_amount = Decimal(str(threshold_required or promo_fee_fc or 0))
+                final_fee = promo_fee_fc if promo_fee_fc > 0 else Decimal(str(threshold_required or 0))
                 academic_year_id = None
 
             query = """
@@ -117,6 +134,25 @@ class FinanceService:
             """
             params = (str(new_amount), now, is_eligible, now, student_id)
             self.db.execute_update(query, params)
+
+            remaining_amount = final_fee - new_amount
+            if remaining_amount < 0:
+                remaining_amount = Decimal("0")
+
+            student_row = self.db.execute_query(
+                "SELECT email, phone_number, firstname, lastname FROM student WHERE id = %s",
+                (student_id,)
+            )
+            if student_row:
+                student = student_row[0]
+                self.notification_service.send_payment_notification(
+                    student_email=student.get('email'),
+                    student_phone=student.get('phone_number'),
+                    student_name=f"{student.get('firstname')} {student.get('lastname')}",
+                    amount_paid=float(new_amount),
+                    remaining_amount=float(remaining_amount),
+                    final_fee=float(final_fee)
+                )
 
             if is_eligible:
                 is_full_paid = new_amount >= final_fee

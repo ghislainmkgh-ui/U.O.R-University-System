@@ -44,8 +44,8 @@ class AcademicYearService:
         """Ajoute une période d'examen"""
         try:
             query = """
-                INSERT INTO exam_period (academic_year_id, name, start_date, end_date, is_active)
-                VALUES (%s, %s, %s, %s, 1)
+                INSERT INTO exam_period (academic_year_id, name, start_date, end_date)
+                VALUES (%s, %s, %s, %s)
             """
             self.db.execute_update(query, (academic_year_id, name, start_date, end_date))
             return True
@@ -58,7 +58,7 @@ class AcademicYearService:
         try:
             query = """
                 SELECT * FROM exam_period
-                WHERE academic_year_id = %s AND is_active = 1
+                WHERE academic_year_id = %s
                 ORDER BY start_date ASC
             """
             return self.db.execute_query(query, (academic_year_id,))
@@ -74,7 +74,6 @@ class AcademicYearService:
                 SELECT COUNT(*) as cnt
                 FROM exam_period
                 WHERE academic_year_id = %s
-                  AND is_active = 1
                   AND %s BETWEEN start_date AND end_date
             """
             rows = self.db.execute_query(query, (academic_year_id, when))

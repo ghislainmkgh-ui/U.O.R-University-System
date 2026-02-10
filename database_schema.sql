@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS promotion (
     name VARCHAR(255) NOT NULL,
     year INT NOT NULL,
     department_id INT NOT NULL,
+    fee_usd DECIMAL(10, 2) DEFAULT 0.00,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -54,6 +55,8 @@ CREATE TABLE IF NOT EXISTS student (
     firstname VARCHAR(255) NOT NULL,
     lastname VARCHAR(255) NOT NULL,
     email VARCHAR(255),
+    passport_photo_path VARCHAR(512) DEFAULT NULL,
+    passport_photo_blob LONGBLOB,
     promotion_id INT NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     face_encoding LONGBLOB,
@@ -105,20 +108,25 @@ CREATE TABLE IF NOT EXISTS access_log (
 -- Insérer des données de test
 INSERT INTO faculty (name, code, description) VALUES
 ('Faculté des Sciences', 'FS', 'Sciences et Technologies'),
+('Faculté des Sciences de l''Ingénieur', 'FSI', 'Sciences et Ingénierie'),
 ('Faculté des Lettres', 'FL', 'Humanités et Lettres'),
 ('Faculté de Gestion', 'FG', 'Commerce et Management');
 
 INSERT INTO department (name, code, faculty_id) VALUES
 ('Informatique', 'INFO', 1),
 ('Mathématiques', 'MATH', 1),
-('Français', 'FR', 2),
-('Gestion', 'GEST', 3);
+('Génie Informatique', 'G.I', 2),
+('Génie Civil', 'G.C', 2),
+('Français', 'FR', 3),
+('Gestion', 'GEST', 4);
 
 INSERT INTO promotion (name, year, department_id) VALUES
 ('L2 Informatique', 2024, 1),
 ('L3 Informatique', 2023, 1),
 ('L2 Mathématiques', 2024, 2),
-('L2 Français', 2024, 3);
+('L3-LMD/G.I', 2023, 3),
+('L2-LMD/G.I', 2024, 3),
+('L2 Français', 2024, 5);
 
 -- Note: Les mots de passe doivent être hashés avec bcrypt en application
 -- Hash pour 'password123': $2b$12$... (généré par l'application)

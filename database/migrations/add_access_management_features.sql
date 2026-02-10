@@ -7,6 +7,15 @@
 ALTER TABLE student 
 ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20) DEFAULT NULL AFTER email;
 
+ALTER TABLE student
+ADD COLUMN IF NOT EXISTS passport_photo_path VARCHAR(512) DEFAULT NULL AFTER phone_number;
+
+ALTER TABLE student
+ADD COLUMN IF NOT EXISTS passport_photo_blob LONGBLOB AFTER passport_photo_path;
+
+ALTER TABLE promotion
+ADD COLUMN IF NOT EXISTS fee_usd DECIMAL(10, 2) DEFAULT 0.00 AFTER department_id;
+
 -- =====================================================
 -- 2. CREATE ACADEMIC_YEAR TABLE
 -- =====================================================

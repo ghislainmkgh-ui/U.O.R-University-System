@@ -13,6 +13,7 @@ from tkinter import filedialog, messagebox, StringVar
 from PIL import Image
 from ui.i18n.translator import Translator
 from ui.theme.theme_manager import ThemeManager
+from ui.components.modern_widgets import LoadingIndicator
 from app.services.dashboard_service import DashboardService
 from app.services.student.student_service import StudentService
 from app.services.auth.authentication_service import AuthenticationService
@@ -356,6 +357,57 @@ class AdminDashboard(ctk.CTkFrame):
             self.after(10, lambda: slide(x - max(40, width // 20)))
 
         slide(width)
+
+    def _animate_window_open(self, window):
+        """Affiche correctement une fenêtre secondaire (sans animation lourde)."""
+        if not window:
+            return
+
+        try:
+            window.update_idletasks()
+        except Exception:
+            return
+
+        try:
+            parent = self.winfo_toplevel()
+            if parent is not window:
+                window.transient(parent)
+        except Exception:
+            pass
+
+        try:
+            window.deiconify()
+            window.lift()
+            window.focus_set()
+        except Exception:
+            pass
+
+    def _show_loading_dialog(self, title: str = "Traitement en cours..."):
+        """Affiche un dialog avec un loading indicator
+        
+        Returns: (dialog_window, loading_indicator_widget)
+        """
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(title)
+        dialog.geometry("350x120")
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        
+        # Centrer la fenêtre
+        dialog.update_idletasks()
+        x = dialog.winfo_screenwidth() // 2 - 175
+        y = dialog.winfo_screenheight() // 2 - 60
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Contenu
+        container = ctk.CTkFrame(dialog, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        loading = LoadingIndicator(container, text=title, color=self.colors.get("primary", "#3b82f6"))
+        loading.start()
+        
+        self._animate_window_open(dialog)
+        return dialog, loading
 
     def _make_card_clickable(self, card, command):
         """Rend une carte cliquable avec effet hover"""
@@ -916,12 +968,21 @@ class AdminDashboard(ctk.CTkFrame):
         self._refresh_esp32_status()
     
     def _show_students(self):
-        """Affiche la page Étudiants"""
+        """Affiche la page Étudiants avec navigation hiérarchique Faculté > Département > Promotion"""
         self.current_view = "students"
         self._clear_content()
         self._update_nav_buttons("students")
         self.title_label.configure(text=self._t("students_title", "Gestion des Étudiants"))
         self.subtitle_label.configure(text=self._t("students_subtitle", "Gestion et suivi des étudiants"))
+        
+        # Variables de navigation
+        self.nav_state = {
+            'level': 'faculty',  # faculty, department, promotion
+            'selected_faculty': None,
+            'selected_department': None,
+            'selected_promotion': None
+        }
+        self.selected_academic_year_id = None
         
         # === HEADER ===
         header = ctk.CTkFrame(self.content_frame, fg_color="transparent")
@@ -945,197 +1006,725 @@ class AdminDashboard(ctk.CTkFrame):
             command=self._open_add_student_dialog
         )
         add_btn.pack(side="right")
+
+        # Récupérer toutes les données des étudiants
+        self.students_full_data_all = self.student_service.get_all_students_with_finance()
+
+        # === NAVIGATION ANNÉE ACADÉMIQUE ===
+        year_filter_frame = ctk.CTkFrame(self.content_frame, fg_color=self.colors["hover"], corner_radius=8)
+        year_filter_frame.pack(fill="x", pady=(0, 15))
+
+        ctk.CTkLabel(
+            year_filter_frame,
+            text="📅 Année académique:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(side="left", padx=(15, 10), pady=8)
+
+        academic_years = self.academic_year_service.get_years()
+        year_names = [y.get("year_name") for y in academic_years if y.get("year_name")]
+        self.academic_year_map = {y.get("year_name"): y.get("academic_year_id") for y in academic_years}
+
+        year_filter = ctk.CTkComboBox(
+            year_filter_frame,
+            values=["Toutes Années"] + year_names,
+            width=220,
+            height=30
+        )
+        year_filter.set("Toutes Années")
+        year_filter.pack(side="left", padx=(0, 10), pady=8)
+
+        has_year_data = any(s.get("academic_year_id") for s in self.students_full_data_all)
+        if not has_year_data or not year_names:
+            year_filter.configure(state="disabled")
         
         # Stats rapides
         stats_frame = ctk.CTkFrame(header, fg_color="transparent")
-        stats_frame.pack(side="right")
-        
-        total = self.dashboard_service.get_total_students()
-        eligible = self.dashboard_service.get_eligible_students()
-        non_eligible = self.dashboard_service.get_non_eligible_students()
-        
-        ctk.CTkLabel(
+        stats_frame.pack(side="right", padx=(0, 20))
+        self.students_stats_label = ctk.CTkLabel(
             stats_frame,
-            text=f"Total: {total} | Éligibles: {eligible} | Non-éligibles: {non_eligible}",
+            text="",
             font=ctk.CTkFont(size=12),
             text_color=self.colors["text_light"]
-        ).pack()
+        )
+        self.students_stats_label.pack()
         
-        # === TABLEAU ÉTUDIANTS ===
-        table_card = self._create_card(self.content_frame)
-        table_card.pack(fill="both", expand=True)
+        # === BREADCRUMB (Fil d'Ariane) ===
+        self.breadcrumb_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        self.breadcrumb_frame.pack(fill="x", pady=(0, 15))
         
-        # Recherche
-        search_frame = ctk.CTkFrame(table_card, fg_color=self.colors["hover"], corner_radius=8)
-        search_frame.pack(fill="x", padx=25, pady=(20, 15))
+        # === CONTAINER PRINCIPAL ===
+        self.students_main_card = self._create_card(self.content_frame)
+        self.students_main_card.pack(fill="both", expand=True)
+
+        # Afficher la vue initiale (Facultés)
+        self._update_students_stats()
+        self._render_students_navigation()
+
+        year_filter.configure(command=lambda _value: self._on_students_year_change(year_filter.get()))
+    
+    def _render_students_navigation(self):
+        """Rend la navigation hiérarchique selon le niveau actuel"""
+        self.students_full_data = self._get_students_filtered_by_year()
+        # Nettoyer le contenu
+        for widget in self.students_main_card.winfo_children():
+            widget.destroy()
+        
+        # Mettre à jour le breadcrumb
+        self._update_breadcrumb()
+        
+        # Afficher le niveau approprié
+        if self.nav_state['level'] == 'faculty':
+            self._show_faculties_view()
+        elif self.nav_state['level'] == 'department':
+            self._show_departments_view()
+        elif self.nav_state['level'] == 'promotion':
+            self._show_promotions_view()
+
+    def _get_students_filtered_by_year(self):
+        """Retourne les étudiants filtrés par année académique sélectionnée"""
+        data = self.students_full_data_all or []
+        if not self.selected_academic_year_id:
+            return data
+        return [s for s in data if s.get("academic_year_id") == self.selected_academic_year_id]
+
+    def _update_students_stats(self):
+        """Met à jour les stats rapides selon l'année sélectionnée"""
+        data = self._get_students_filtered_by_year()
+        total = len(data)
+        eligible = sum(1 for s in data if s.get("is_eligible"))
+        non_eligible = total - eligible
+        if self.students_stats_label:
+            self.students_stats_label.configure(
+                text=f"Total: {total} | ✅ Éligibles: {eligible} | ❌ Non-éligibles: {non_eligible}"
+            )
+
+    def _on_students_year_change(self, selected_value: str):
+        """Gère le changement d'année académique pour la vue étudiants"""
+        if selected_value == "Toutes Années":
+            self.selected_academic_year_id = None
+        else:
+            self.selected_academic_year_id = self.academic_year_map.get(selected_value)
+
+        self.nav_state['level'] = 'faculty'
+        self.nav_state['selected_faculty'] = None
+        self.nav_state['selected_department'] = None
+        self.nav_state['selected_promotion'] = None
+
+        self._update_students_stats()
+        self._render_students_navigation()
+    
+    def _update_breadcrumb(self):
+        """Met à jour le fil d'Ariane"""
+        for widget in self.breadcrumb_frame.winfo_children():
+            widget.destroy()
+        
+        # Icône maison pour retour aux facultés
+        home_btn = ctk.CTkButton(
+            self.breadcrumb_frame,
+            text="🏛️ Facultés",
+            fg_color=self.colors["primary"] if self.nav_state['level'] == 'faculty' else "transparent",
+            hover_color=self.colors["hover"],
+            text_color=self.colors["text_white"] if self.nav_state['level'] == 'faculty' else self.colors["primary"],
+            height=28,
+            corner_radius=6,
+            command=lambda: self._navigate_to('faculty')
+        )
+        home_btn.pack(side="left", padx=(0, 5))
+        
+        if self.nav_state['selected_faculty']:
+            # Séparateur
+            ctk.CTkLabel(
+                self.breadcrumb_frame,
+                text="›",
+                font=ctk.CTkFont(size=16),
+                text_color=self.colors["text_light"]
+            ).pack(side="left", padx=5)
+            
+            # Bouton faculté
+            faculty_btn = ctk.CTkButton(
+                self.breadcrumb_frame,
+                text=f"📚 {self.nav_state['selected_faculty']['name']}",
+                fg_color=self.colors["primary"] if self.nav_state['level'] == 'department' else "transparent",
+                hover_color=self.colors["hover"],
+                text_color=self.colors["text_white"] if self.nav_state['level'] == 'department' else self.colors["primary"],
+                height=28,
+                corner_radius=6,
+                command=lambda: self._navigate_to('department')
+            )
+            faculty_btn.pack(side="left", padx=(0, 5))
+        
+        if self.nav_state['selected_department']:
+            # Séparateur
+            ctk.CTkLabel(
+                self.breadcrumb_frame,
+                text="›",
+                font=ctk.CTkFont(size=16),
+                text_color=self.colors["text_light"]
+            ).pack(side="left", padx=5)
+            
+            # Bouton département
+            dept_btn = ctk.CTkButton(
+                self.breadcrumb_frame,
+                text=f"📂 {self.nav_state['selected_department']['name']}",
+                fg_color=self.colors["primary"],
+                hover_color=self.colors["hover"],
+                text_color=self.colors["text_white"],
+                height=28,
+                corner_radius=6,
+                state="disabled"
+            )
+            dept_btn.pack(side="left")
+    
+    def _navigate_to(self, level):
+        """Navigation entre les niveaux"""
+        if level == 'faculty':
+            self.nav_state['level'] = 'faculty'
+            self.nav_state['selected_faculty'] = None
+            self.nav_state['selected_department'] = None
+            self.nav_state['selected_promotion'] = None
+        elif level == 'department':
+            self.nav_state['level'] = 'department'
+            self.nav_state['selected_department'] = None
+            self.nav_state['selected_promotion'] = None
+        
+        self._render_students_navigation()
+    
+    def _show_faculties_view(self):
+        """Affiche les cartes des facultés"""
+        # Titre
+        title_frame = ctk.CTkFrame(self.students_main_card, fg_color="transparent")
+        title_frame.pack(fill="x", padx=25, pady=(20, 15))
+        
+        ctk.CTkLabel(
+            title_frame,
+            text="🏛️ Sélectionnez une Faculté",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w")
+        
+        ctk.CTkLabel(
+            title_frame,
+            text="Cliquez sur une faculté pour voir ses départements",
+            font=ctk.CTkFont(size=12),
+            text_color=self.colors["text_light"]
+        ).pack(anchor="w", pady=(5, 0))
+        
+        # Scroll frame pour les cartes
+        scroll_frame = ctk.CTkScrollableFrame(self.students_main_card, fg_color="transparent")
+        scroll_frame.pack(fill="both", expand=True, padx=25, pady=(0, 20))
+        
+        # Regrouper les étudiants par faculté
+        faculties_data = {}
+        for student in self.students_full_data:
+            faculty_id = student.get('faculty_id')
+            faculty_name = student.get('faculty_name')
+            faculty_code = student.get('faculty_code')
+            
+            if not faculty_id or not faculty_name:
+                continue
+            
+            if faculty_id not in faculties_data:
+                faculties_data[faculty_id] = {
+                    'id': faculty_id,
+                    'name': faculty_name,
+                    'code': faculty_code or faculty_name[:3].upper(),
+                    'students': []
+                }
+            faculties_data[faculty_id]['students'].append(student)
+        
+        # Créer les cartes
+        if not faculties_data:
+            ctk.CTkLabel(
+                scroll_frame,
+                text="Aucune faculté trouvée",
+                font=ctk.CTkFont(size=14),
+                text_color=self.colors["text_light"]
+            ).pack(pady=50)
+            return
+        
+        # Grille de cartes (2 colonnes)
+        for idx, (faculty_id, faculty_info) in enumerate(sorted(faculties_data.items(), key=lambda x: x[1]['name'])):
+            card = ctk.CTkFrame(
+                scroll_frame,
+                fg_color=self.colors["hover"],
+                corner_radius=12,
+                cursor="hand2"
+            )
+            card.pack(fill="x", pady=8)
+            
+            # Bind click event
+            card.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
+            
+            # Contenu de la carte
+            content_frame = ctk.CTkFrame(card, fg_color="transparent")
+            content_frame.pack(fill="both", expand=True, padx=20, pady=15)
+            content_frame.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
+            
+            # Header
+            header_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+            header_frame.pack(fill="x")
+            header_frame.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
+            
+            icon_label = ctk.CTkLabel(
+                header_frame,
+                text="🏛️",
+                font=ctk.CTkFont(size=32)
+            )
+            icon_label.pack(side="left", padx=(0, 15))
+            icon_label.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
+            
+            info_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+            info_frame.pack(side="left", fill="x", expand=True)
+            info_frame.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
+            
+            name_label = ctk.CTkLabel(
+                info_frame,
+                text=faculty_info['name'],
+                font=ctk.CTkFont(size=16, weight="bold"),
+                text_color=self.colors["text_dark"],
+                anchor="w"
+            )
+            name_label.pack(anchor="w")
+            name_label.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
+            
+            code_label = ctk.CTkLabel(
+                info_frame,
+                text=f"Code: {faculty_info['code']}",
+                font=ctk.CTkFont(size=12),
+                text_color=self.colors["text_light"],
+                anchor="w"
+            )
+            code_label.pack(anchor="w")
+            code_label.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
+            
+            # Stats
+            students_count = len(faculty_info['students'])
+            eligible_count = sum(1 for s in faculty_info['students'] if s.get('is_eligible'))
+            
+            stats_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+            stats_frame.pack(fill="x", pady=(10, 0))
+            stats_frame.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
+            
+            self._create_stat_badge(stats_frame, "👥", f"{students_count} étudiants", self.colors["info"]).pack(side="left", padx=(0, 10))
+            self._create_stat_badge(stats_frame, "✅", f"{eligible_count} éligibles", self.colors["success"]).pack(side="left")
+    
+    def _show_departments_view(self):
+        """Affiche les départements de la faculté sélectionnée"""
+        if not self.nav_state['selected_faculty']:
+            return
+        
+        # Titre
+        title_frame = ctk.CTkFrame(self.students_main_card, fg_color="transparent")
+        title_frame.pack(fill="x", padx=25, pady=(20, 15))
+        
+        ctk.CTkLabel(
+            title_frame,
+            text=f"📂 Départements de {self.nav_state['selected_faculty']['name']}",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w")
+        
+        ctk.CTkLabel(
+            title_frame,
+            text="Cliquez sur un département pour voir ses promotions",
+            font=ctk.CTkFont(size=12),
+            text_color=self.colors["text_light"]
+        ).pack(anchor="w", pady=(5, 0))
+        
+        # Scroll frame
+        scroll_frame = ctk.CTkScrollableFrame(self.students_main_card, fg_color="transparent")
+        scroll_frame.pack(fill="both", expand=True, padx=25, pady=(0, 20))
+        
+        # Regrouper par département
+        departments_data = {}
+        faculty_id = self.nav_state['selected_faculty']['id']
+        
+        for student in self.students_full_data:
+            if student.get('faculty_id') != faculty_id:
+                continue
+            
+            dept_id = student.get('department_id')
+            dept_name = student.get('department_name')
+            dept_code = student.get('department_code')
+            
+            if not dept_id or not dept_name:
+                continue
+            
+            if dept_id not in departments_data:
+                departments_data[dept_id] = {
+                    'id': dept_id,
+                    'name': dept_name,
+                    'code': dept_code or dept_name[:3].upper(),
+                    'students': []
+                }
+            departments_data[dept_id]['students'].append(student)
+        
+        if not departments_data:
+            ctk.CTkLabel(
+                scroll_frame,
+                text="Aucun département trouvé pour cette faculté",
+                font=ctk.CTkFont(size=14),
+                text_color=self.colors["text_light"]
+            ).pack(pady=50)
+            return
+        
+        # Créer les cartes
+        for dept_id, dept_info in sorted(departments_data.items(), key=lambda x: x[1]['name']):
+            card = ctk.CTkFrame(
+                scroll_frame,
+                fg_color=self.colors["hover"],
+                corner_radius=12,
+                cursor="hand2"
+            )
+            card.pack(fill="x", pady=8)
+            
+            card.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
+            
+            # Contenu
+            content_frame = ctk.CTkFrame(card, fg_color="transparent")
+            content_frame.pack(fill="both", expand=True, padx=20, pady=15)
+            content_frame.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
+            
+            # Header
+            header_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+            header_frame.pack(fill="x")
+            header_frame.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
+            
+            icon_label = ctk.CTkLabel(
+                header_frame,
+                text="📂",
+                font=ctk.CTkFont(size=32)
+            )
+            icon_label.pack(side="left", padx=(0, 15))
+            icon_label.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
+            
+            info_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+            info_frame.pack(side="left", fill="x", expand=True)
+            info_frame.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
+            
+            name_label = ctk.CTkLabel(
+                info_frame,
+                text=dept_info['name'],
+                font=ctk.CTkFont(size=16, weight="bold"),
+                text_color=self.colors["text_dark"],
+                anchor="w"
+            )
+            name_label.pack(anchor="w")
+            name_label.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
+            
+            code_label = ctk.CTkLabel(
+                info_frame,
+                text=f"Code: {dept_info['code']}",
+                font=ctk.CTkFont(size=12),
+                text_color=self.colors["text_light"],
+                anchor="w"
+            )
+            code_label.pack(anchor="w")
+            code_label.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
+            
+            # Stats
+            students_count = len(dept_info['students'])
+            eligible_count = sum(1 for s in dept_info['students'] if s.get('is_eligible'))
+            
+            stats_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+            stats_frame.pack(fill="x", pady=(10, 0))
+            stats_frame.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
+            
+            self._create_stat_badge(stats_frame, "👥", f"{students_count} étudiants", self.colors["info"]).pack(side="left", padx=(0, 10))
+            self._create_stat_badge(stats_frame, "✅", f"{eligible_count} éligibles", self.colors["success"]).pack(side="left")
+    
+    def _show_promotions_view(self):
+        """Affiche les promotions et étudiants du département sélectionné"""
+        if not self.nav_state['selected_department']:
+            return
+        
+        # Titre avec barre de recherche
+        title_frame = ctk.CTkFrame(self.students_main_card, fg_color="transparent")
+        title_frame.pack(fill="x", padx=25, pady=(20, 15))
+        
+        left_frame = ctk.CTkFrame(title_frame, fg_color="transparent")
+        left_frame.pack(side="left", fill="x", expand=True)
+        
+        ctk.CTkLabel(
+            left_frame,
+            text=f"🎓 Promotions - {self.nav_state['selected_department']['name']}",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w")
+        
+        ctk.CTkLabel(
+            left_frame,
+            text="Liste des étudiants par promotion",
+            font=ctk.CTkFont(size=12),
+            text_color=self.colors["text_light"]
+        ).pack(anchor="w", pady=(5, 0))
+        
+        # Barre de recherche
+        search_frame = ctk.CTkFrame(self.students_main_card, fg_color=self.colors["hover"], corner_radius=8)
+        search_frame.pack(fill="x", padx=25, pady=(0, 15))
         
         ctk.CTkLabel(
             search_frame,
-            text=f"🔍 {self._t('search', 'Recherche')}: ",
-            font=ctk.CTkFont(size=12),
-            text_color=self.colors["text_dark"]
-        ).pack(side="left", padx=(15, 10), pady=8)
+            text="🔍",
+            font=ctk.CTkFont(size=14)
+        ).pack(side="left", padx=(15, 5), pady=8)
         
         search_entry = ctk.CTkEntry(
             search_frame,
-            placeholder_text=self._t("search_placeholder", "Nom, ID ou email..."),
+            placeholder_text="Rechercher un étudiant (nom, email...)...",
             height=30,
-            border_color=self.colors["border"]
+            border_width=0,
+            fg_color="transparent"
         )
-        search_entry.pack(side="left", fill="x", expand=True, padx=(0, 15), pady=8)
-
-        # Filtre par année académique
-        years = self.academic_year_service.get_years()
-        year_values = ["Toutes"] + [y.get("year_name") or y.get("name") for y in years if (y.get("year_name") or y.get("name"))]
-        year_map = {(y.get("year_name") or y.get("name")): y.get("academic_year_id") for y in years if (y.get("year_name") or y.get("name"))}
-        year_filter = ctk.CTkComboBox(
-            search_frame,
-            values=year_values,
-            width=180,
-            height=30
-        )
-        year_filter.set("Toutes")
-        year_filter.pack(side="right", padx=(0, 15), pady=8)
-        
-        # Tableau header
-        headers = ["Photo", "Nom Complet", "ID Étudiant", "Email", "Statut Paiement", "Éligibilité", "Solde restant ($)", "Action"]
-        column_weights = [1, 3, 1, 3, 2, 1, 2, 1]
-        header_frame = ctk.CTkFrame(table_card, fg_color=self.colors["border"], corner_radius=0)
-        header_frame.pack(fill="x", padx=25, pady=(0, 0))
-        header_anchors = ["center", "w", "w", "w", "center", "center", "e", "center"]
-        for col, header_text in enumerate(headers):
-            ctk.CTkLabel(
-                header_frame,
-                text=header_text,
-                font=ctk.CTkFont(size=11, weight="bold"),
-                text_color=self.colors["text_dark"],
-                anchor=header_anchors[col]
-            ).grid(row=0, column=col, sticky="ew", padx=15, pady=10)
-        self._configure_table_columns(header_frame, column_weights)
+        search_entry.pack(side="left", fill="x", expand=True, padx=(5, 15), pady=8)
         
         # Scroll frame
-        scroll_frame = ctk.CTkScrollableFrame(table_card, fg_color="transparent")
-        scroll_frame.pack(fill="both", expand=True, padx=25, pady=(15, 20))
+        scroll_frame = ctk.CTkScrollableFrame(self.students_main_card, fg_color="transparent")
+        scroll_frame.pack(fill="both", expand=True, padx=25, pady=(0, 20))
         
-        students_data = self.student_service.get_all_students_with_finance()
-
-        def render_students(filter_text: str = ""):
+        # Regrouper par promotion
+        promotions_data = {}
+        dept_id = self.nav_state['selected_department']['id']
+        
+        for student in self.students_full_data:
+            if student.get('department_id') != dept_id:
+                continue
+            
+            promo_id = student.get('promotion_id')
+            promo_name = student.get('promotion_name')
+            promo_year = student.get('promotion_year')
+            promo_fee = student.get('promotion_fee', 0)
+            promo_threshold = student.get('promotion_threshold', 0)
+            
+            if not promo_id or not promo_name:
+                continue
+            
+            if promo_id not in promotions_data:
+                promotions_data[promo_id] = {
+                    'id': promo_id,
+                    'name': promo_name,
+                    'year': promo_year,
+                    'fee': promo_fee,
+                    'threshold': promo_threshold,
+                    'students': []
+                }
+            promotions_data[promo_id]['students'].append(student)
+        
+        if not promotions_data:
+            ctk.CTkLabel(
+                scroll_frame,
+                text="Aucune promotion trouvée pour ce département",
+                font=ctk.CTkFont(size=14),
+                text_color=self.colors["text_light"]
+            ).pack(pady=50)
+            return
+        
+        def render_students(filter_text=""):
             for widget in scroll_frame.winfo_children():
                 widget.destroy()
-
+            
             query = filter_text.lower().strip()
-            filtered = []
-            selected_year = year_filter.get()
-            selected_year_id = year_map.get(selected_year) if selected_year != "Toutes" else None
-            for student in students_data:
-                fullname = f"{student.get('firstname', '')} {student.get('lastname', '')}".strip()
-                student_number = student.get('student_number', '-')
-                email = student.get('email') or "-"
-                haystack = f"{fullname} {student_number} {email}".lower()
-                if selected_year_id and student.get("academic_year_id") and student.get("academic_year_id") != selected_year_id:
+            
+            # Pour chaque promotion
+            for promo_id, promo_info in sorted(promotions_data.items(), key=lambda x: x[1]['name']):
+                # Filtrer les étudiants
+                filtered_students = []
+                for student in promo_info['students']:
+                    fullname = f"{student.get('firstname', '')} {student.get('lastname', '')}".strip()
+                    email = student.get('email', '')
+                    student_number = student.get('student_number', '')
+                    
+                    haystack = f"{fullname} {email} {student_number}".lower()
+                    if query and query not in haystack:
+                        continue
+                    filtered_students.append(student)
+                
+                if not filtered_students:
                     continue
-                if not query or query in haystack:
-                    filtered.append(student)
-
-            if not filtered:
+                
+                # En-tête de promotion
+                promo_header = ctk.CTkFrame(scroll_frame, fg_color=self.colors["primary"], corner_radius=8)
+                promo_header.pack(fill="x", pady=(0 if promo_id == list(promotions_data.keys())[0] else 15, 8))
+                
+                promo_header_content = ctk.CTkFrame(promo_header, fg_color="transparent")
+                promo_header_content.pack(fill="x", padx=15, pady=10)
+                
                 ctk.CTkLabel(
-                    scroll_frame,
-                    text=self._t("no_students", "Aucun étudiant trouvé."),
-                    font=ctk.CTkFont(size=12),
-                    text_color=self.colors["text_light"]
-                ).pack(pady=20)
-                return
-
-            for student in filtered:
-                row = ctk.CTkFrame(scroll_frame, fg_color=self.colors["hover"], corner_radius=6)
-                row.pack(fill="x", pady=4)
-
-                self._configure_table_columns(row, column_weights)
-
-                fullname = f"{student.get('firstname', '')} {student.get('lastname', '')}".strip()
-                student_number = student.get('student_number', '-')
-                email = student.get('email') or "-"
-                photo_path = student.get('passport_photo_path')
-                photo_blob = student.get('passport_photo_blob')
-                amount_paid = Decimal(str(student.get('amount_paid') or 0))
-                threshold_required = Decimal(str(student.get('threshold_required') or 0))
-                is_eligible = bool(student.get('is_eligible')) or (threshold_required > 0 and amount_paid >= threshold_required)
-                remaining_amount = threshold_required - amount_paid
-                if remaining_amount < 0:
-                    remaining_amount = Decimal("0")
-
-                if amount_paid <= 0:
-                    payment_status = "Non payé"
-                elif threshold_required > 0 and amount_paid < threshold_required:
-                    payment_status = "Partiellement"
-                else:
-                    payment_status = "Payé"
-
-                eligibility_text = "✅ Éligible" if is_eligible else "❌ Non"
-
-                payment_color = self.colors["success"] if payment_status == "Payé" else (self.colors["warning"] if payment_status == "Partiellement" else self.colors["danger"])
-                eligibility_color = self.colors["success"] if is_eligible else self.colors["danger"]
-
-                self._render_photo_cell(row, 0, photo_path=photo_path, photo_blob=photo_blob, size=(40, 50))
-
-                row_values = [fullname, student_number, email, payment_status, eligibility_text, self._format_usd(remaining_amount)]
-                row_colors = [self.colors["text_dark"], self.colors["text_light"], self.colors["text_light"], payment_color, eligibility_color, self.colors["text_light"]]
-                row_weights = ["normal", "normal", "normal", "normal", "bold", "normal"]
-                row_anchors = ["w", "w", "w", "center", "center", "e"]
-                self._populate_table_row_with_offset(
-                    row,
-                    row_values,
-                    column_weights,
-                    start_col=1,
-                    text_colors=row_colors,
-                    font_weights=row_weights,
-                    anchors=row_anchors,
-                    padx=15,
-                    pady=6
+                    promo_header_content,
+                    text=f"🎓 {promo_info['name']} ({promo_info['year']})",
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    text_color=self.colors["text_white"]
+                ).pack(side="left")
+                
+                # Stats promotion
+                stats_label = ctk.CTkLabel(
+                    promo_header_content,
+                    text=f"👥 {len(filtered_students)} étudiant{'s' if len(filtered_students) > 1 else ''} | 💰 Frais: ${promo_info['fee']:.2f} | Seuil: ${promo_info['threshold']:.2f}",
+                    font=ctk.CTkFont(size=11),
+                    text_color=self.colors["text_white"]
                 )
-
-                action_frame = ctk.CTkFrame(row, fg_color="transparent")
-                action_frame.grid(row=0, column=7, sticky="e", padx=10, pady=6)
-
-                edit_btn = ctk.CTkButton(
-                    action_frame,
-                    text="Modifier",
-                    width=90,
-                    height=24,
-                    fg_color=self.colors["info"],
-                    hover_color="#0891b2",
-                    text_color=self.colors["text_white"],
-                    command=lambda s=student: self._open_edit_student_dialog(s)
-                )
-                edit_btn.pack(side="top", pady=(0, 4))
-
-                pay_btn = ctk.CTkButton(
-                    action_frame,
-                    text="Paiement",
-                    width=90,
-                    height=24,
-                    fg_color=self.colors["primary"],
-                    hover_color="#2563eb",
-                    text_color=self.colors["text_white"],
-                    command=lambda s=student: self._open_payment_dialog(s)
-                )
-                pay_btn.pack(side="top")
-
-                history_btn = ctk.CTkButton(
-                    action_frame,
-                    text="Historique",
-                    width=90,
-                    height=24,
-                    fg_color=self.colors["warning"],
-                    hover_color="#f59e0b",
-                    text_color=self.colors["text_white"],
-                    command=lambda s=student: self._open_payment_history_dialog(s)
-                )
-                history_btn.pack(side="top", pady=(4, 0))
-
+                stats_label.pack(side="right")
+                
+                # Tableau des étudiants
+                table_frame = ctk.CTkFrame(scroll_frame, fg_color=self.colors["card_bg"], corner_radius=8)
+                table_frame.pack(fill="x", pady=(0, 0))
+                
+                # Header du tableau
+                headers = ["Photo", "Nom Complet", "Email", "💰 Payé", "Éligibilité", "Solde ($)", "Actions"]
+                column_weights = [1, 3, 3, 1, 1, 1, 2]
+                
+                header_row = ctk.CTkFrame(table_frame, fg_color=self.colors["border"], corner_radius=0)
+                header_row.pack(fill="x", padx=0, pady=0)
+                self._configure_table_columns(header_row, column_weights)
+                
+                for col, header_text in enumerate(headers):
+                    ctk.CTkLabel(
+                        header_row,
+                        text=header_text,
+                        font=ctk.CTkFont(size=11, weight="bold"),
+                        text_color=self.colors["text_dark"]
+                    ).grid(row=0, column=col, sticky="ew", padx=10, pady=8)
+                
+                # Lignes des étudiants
+                for student in filtered_students:
+                    self._render_student_row_in_promotion(table_frame, student, column_weights)
+        
+        # Rendu initial
         render_students()
-        search_entry.bind("<KeyRelease>", lambda event: render_students(search_entry.get()))
-        year_filter.configure(command=lambda _value: render_students(search_entry.get()))
+        search_entry.bind("<KeyRelease>", lambda e: render_students(search_entry.get()))
+    
+    def _render_student_row_in_promotion(self, parent, student, column_weights):
+        """Rend une ligne étudiant dans la vue promotion"""
+        row = ctk.CTkFrame(parent, fg_color=self.colors["hover"], corner_radius=0)
+        row.pack(fill="x", pady=1, padx=0)
+        self._configure_table_columns(row, column_weights)
+        
+        fullname = f"{student.get('firstname', '')} {student.get('lastname', '')}".strip()
+        email = student.get('email') or "-"
+        photo_path = student.get('passport_photo_path')
+        photo_blob = student.get('passport_photo_blob')
+        amount_paid = Decimal(str(student.get('amount_paid') or 0))
+        
+        promotion_threshold = Decimal(str(student.get('promotion_threshold') or 0))
+        promotion_fee = Decimal(str(student.get('promotion_fee') or 0))
+        
+        is_eligible = bool(student.get('is_eligible')) or (promotion_threshold > 0 and amount_paid >= promotion_threshold)
+        remaining_amount = max(Decimal("0"), promotion_fee - amount_paid)
+        
+        # Photo
+        self._render_photo_cell(row, 0, photo_path=photo_path, photo_blob=photo_blob, size=(35, 45))
+        
+        # Nom
+        ctk.CTkLabel(
+            row,
+            text=fullname,
+            font=ctk.CTkFont(size=11),
+            text_color=self.colors["text_dark"],
+            anchor="w"
+        ).grid(row=0, column=1, sticky="ew", padx=10, pady=6)
+        
+        # Email
+        ctk.CTkLabel(
+            row,
+            text=email,
+            font=ctk.CTkFont(size=10),
+            text_color=self.colors["text_light"],
+            anchor="w"
+        ).grid(row=0, column=2, sticky="ew", padx=10, pady=6)
+        
+        # Montant payé
+        ctk.CTkLabel(
+            row,
+            text=f"${amount_paid:.2f}",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["success"] if amount_paid >= promotion_fee else self.colors["warning"],
+            anchor="center"
+        ).grid(row=0, column=3, sticky="ew", padx=10, pady=6)
+        
+        # Éligibilité
+        eligibility_text = "✅" if is_eligible else "❌"
+        ctk.CTkLabel(
+            row,
+            text=eligibility_text,
+            font=ctk.CTkFont(size=14),
+            text_color=self.colors["success"] if is_eligible else self.colors["danger"],
+            anchor="center"
+        ).grid(row=0, column=4, sticky="ew", padx=10, pady=6)
+        
+        # Solde restant
+        ctk.CTkLabel(
+            row,
+            text=f"${remaining_amount:.2f}",
+            font=ctk.CTkFont(size=11),
+            text_color=self.colors["text_light"],
+            anchor="center"
+        ).grid(row=0, column=5, sticky="ew", padx=10, pady=6)
+        
+        # Actions
+        action_frame = ctk.CTkFrame(row, fg_color="transparent")
+        action_frame.grid(row=0, column=6, sticky="ew", padx=10, pady=6)
+        
+        ctk.CTkButton(
+            action_frame,
+            text="✏️",
+            width=30,
+            height=24,
+            fg_color=self.colors["info"],
+            hover_color="#0891b2",
+            command=lambda s=student: self._open_edit_student_dialog(s)
+        ).pack(side="left", padx=2)
+        
+        ctk.CTkButton(
+            action_frame,
+            text="💰",
+            width=30,
+            height=24,
+            fg_color=self.colors["primary"],
+            hover_color="#2563eb",
+            command=lambda s=student: self._open_payment_dialog(s)
+        ).pack(side="left", padx=2)
+        
+        ctk.CTkButton(
+            action_frame,
+            text="📜",
+            width=30,
+            height=24,
+            fg_color=self.colors["warning"],
+            hover_color="#f59e0b",
+            command=lambda s=student: self._open_payment_history_dialog(s)
+        ).pack(side="left", padx=2)
+    
+    def _create_stat_badge(self, parent, icon, text, color):
+        """Crée un badge de statistique"""
+        badge = ctk.CTkFrame(parent, fg_color=color, corner_radius=6)
+        badge.bind("<Button-1>", lambda e: None)  # Propagate click to parent
+        
+        content = ctk.CTkFrame(badge, fg_color="transparent")
+        content.pack(padx=8, pady=4)
+        content.bind("<Button-1>", lambda e: None)
+        
+        ctk.CTkLabel(
+            content,
+            text=f"{icon} {text}",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_white"]
+        ).pack()
+        
+        return badge
+    
+    def _select_faculty(self, faculty_info):
+        """Sélectionne une faculté et passe aux départements"""
+        self.nav_state['level'] = 'department'
+        self.nav_state['selected_faculty'] = faculty_info
+        self._render_students_navigation()
+    
+    def _select_department(self, dept_info):
+        """Sélectionne un département et passe aux promotions"""
+        self.nav_state['level'] = 'promotion'
+        self.nav_state['selected_department'] = dept_info
+        self._render_students_navigation()
+    
 
     def _open_add_student_dialog(self):
         """Ouvre la fenêtre d'inscription d'un nouvel étudiant"""
@@ -1181,21 +1770,55 @@ class AdminDashboard(ctk.CTkFrame):
         firstname_entry = add_labeled_entry("Prénom", "Ex: Jean", row=0, col=1)
         lastname_entry = add_labeled_entry("Nom", "Ex: Dupont", row=2, col=0)
         email_entry = add_labeled_entry("Email", "Ex: jean@uor.rw", row=2, col=1)
-        phone_entry = add_labeled_entry("Téléphone WhatsApp", "Ex: +243123456789", row=4, col=0)
+        phone_entry = add_labeled_entry("Téléphone WhatsApp", "Ex: +243123456789", row=4, col=0, col_span=2)
 
-        threshold_entry = add_labeled_entry("Seuil financier requis ($)", "Optionnel si année académique active", row=4, col=1)
-
-        # Année académique (saisie manuelle)
-        years = self.academic_year_service.get_years()
+        # Année académique (saisie manuelle) - Utiliser get_years_financials pour avoir threshold/final_fee
+        years = self.academic_year_service.get_years_financials()
         year_map = {(y.get("year_name") or y.get("name")): y.get("academic_year_id") for y in years if (y.get("year_name") or y.get("name"))}
 
         ctk.CTkLabel(fields_frame, text="Année académique", font=self._font(12)).grid(row=6, column=0, sticky="w", padx=5, pady=(8, 4))
         year_entry = ctk.CTkEntry(fields_frame, placeholder_text="Ex: 2024-2025")
         year_entry.grid(row=7, column=0, columnspan=2, sticky="ew", padx=5)
+        
+        # Affichage du seuil financier de l'année académique
+        threshold_info_label = ctk.CTkLabel(
+            fields_frame, 
+            text="ℹ️ Sélectionnez une année pour voir le seuil financier",
+            font=self._font(10),
+            text_color=self.colors["text_light"]
+        )
+        threshold_info_label.grid(row=8, column=0, columnspan=2, sticky="w", padx=5, pady=(4, 8))
+        
+        def update_threshold_info(*args):
+            """Met à jour l'affichage du seuil lorsque l'année change"""
+            selected_year_name = year_entry.get().strip()
+            if selected_year_name and selected_year_name in year_map:
+                year_id = year_map[selected_year_name]
+                year_data = next((y for y in years if y.get("academic_year_id") == year_id), None)
+                if year_data:
+                    threshold = year_data.get("threshold_amount", 0) or 0
+                    final_fee = year_data.get("final_fee", 0) or 0
+                    threshold_info_label.configure(
+                        text=f"💰 Seuil financier: ${threshold:,.2f} | Frais totaux: ${final_fee:,.2f}",
+                        text_color=self.colors["success"]
+                    )
+                else:
+                    threshold_info_label.configure(
+                        text="ℹ️ Sélectionnez une année pour voir le seuil financier",
+                        text_color=self.colors["text_light"]
+                    )
+            else:
+                threshold_info_label.configure(
+                    text="ℹ️ Sélectionnez une année pour voir le seuil financier",
+                    text_color=self.colors["text_light"]
+                )
+        
+        year_entry.bind("<KeyRelease>", update_threshold_info)
+        year_entry.bind("<FocusOut>", update_threshold_info)
 
-        faculty_entry = add_labeled_entry("Faculté", "Ex: Informatique / INF", row=8, col=0)
-        department_entry = add_labeled_entry("Département", "Ex: Génie Informatique / G.I", row=8, col=1)
-        promotion_entry = add_labeled_entry("Promotion", "Ex: L3-LMD/G.I", row=10, col=0, col_span=2)
+        faculty_entry = add_labeled_entry("Faculté", "Ex: Informatique / INF", row=9, col=0)
+        department_entry = add_labeled_entry("Département", "Ex: Génie Informatique / G.I", row=9, col=1)
+        promotion_entry = add_labeled_entry("Promotion", "Ex: L3-LMD/G.I", row=11, col=0, col_span=2)
 
         photo_row = ctk.CTkFrame(form, fg_color="transparent")
         photo_row.pack(fill="x", pady=(10, 2))
@@ -1256,7 +1879,6 @@ class AdminDashboard(ctk.CTkFrame):
             faculty_label = faculty_entry.get().strip()
             department_label = department_entry.get().strip()
             promotion_label = promotion_entry.get().strip()
-            threshold_text = threshold_entry.get().strip()
             selected_year_name = year_entry.get().strip()
             selected_year_id = year_map.get(selected_year_name) if selected_year_name else None
             photo_path = photo_path_var.get().strip()
@@ -1284,6 +1906,11 @@ class AdminDashboard(ctk.CTkFrame):
                 else:
                     messagebox.showinfo("Annulé", "Veuillez créer l'année académique d'abord dans la section 'Années Académiques'.")
                     return
+            
+            # Récupérer le seuil de l'année académique
+            if not selected_year_id:
+                messagebox.showerror("Erreur", "Année académique requise.")
+                return
 
             faculty_matches = self.student_service.find_faculty_by_input(faculty_label)
             if not faculty_matches:
@@ -1312,17 +1939,18 @@ class AdminDashboard(ctk.CTkFrame):
             else:
                 promotion_id = promotion_matches[0]["id"]
 
+            # Le seuil vient TOUJOURS de la finance (année académique)
+            # Pas de seuil par défaut si l'année n'en a pas
+            year_data = next((y for y in years if y.get("academic_year_id") == selected_year_id), None)
             threshold_required = None
-            if threshold_text:
-                try:
-                    threshold_required = Decimal(threshold_text)
-                except Exception:
-                    messagebox.showerror("Erreur", "Seuil financier invalide.")
-                    return
+            final_fee_value = None
+            
+            if year_data:
+                threshold_required = Decimal(str(year_data.get("threshold_amount", 0)))
+                final_fee_value = Decimal(str(year_data.get("final_fee", threshold_required)))
             else:
-                active_year = self.academic_year_service.get_active_year()
-                if not active_year:
-                    threshold_required = Decimal("0")
+                messagebox.showerror("Erreur", "Impossible de récupérer les informations financières de l'année académique.")
+                return
 
             encoding = None
             if self.face_service.is_available():
@@ -1383,20 +2011,13 @@ class AdminDashboard(ctk.CTkFrame):
 
             # Envoyer une notification de bienvenue à l'étudiant
             try:
-                active_year = self.academic_year_service.get_active_year() if not threshold_required else None
-                if not threshold_required and active_year:
-                    threshold_required = Decimal(str(active_year.get('threshold_amount') or 0))
-                    final_fee_value = Decimal(str(active_year.get('final_fee') or threshold_required))
-                else:
-                    final_fee_value = threshold_required if threshold_required else Decimal("0")
-                
                 self.notification_service.send_welcome_notification(
                     student_email=email,
                     student_phone=phone_number,
                     student_name=f"{firstname} {lastname}",
                     student_number=student_number,
                     threshold_required=float(threshold_required) if threshold_required else 0.0,
-                    final_fee=float(final_fee_value)
+                    final_fee=float(final_fee_value) if final_fee_value else 0.0
                 )
             except Exception as e:
                 logger.warning(f"Failed to send welcome notification: {e}")
@@ -1695,6 +2316,13 @@ class AdminDashboard(ctk.CTkFrame):
         amount_entry = ctk.CTkEntry(form, placeholder_text="Ex: 50")
         amount_entry.pack(fill="x", pady=(6, 10))
 
+        # Conteneur pour l'indicateur de chargement (caché initialement)
+        loading_container = ctk.CTkFrame(form, fg_color="transparent")
+        loading_container.pack(anchor="w", pady=(0, 6))
+        
+        loading_indicator = LoadingIndicator(loading_container, text="Traitement du paiement...")
+        loading_indicator.pack(fill="x")
+
         def save_payment():
             amount_text = amount_entry.get().strip().replace(",", ".")
             if not amount_text:
@@ -1729,23 +2357,47 @@ class AdminDashboard(ctk.CTkFrame):
                         )
                         return
 
-                if self.finance_service.record_payment(student_id, amount_usd):
-                    messagebox.showinfo("Succès", "Paiement enregistré.")
-                    dialog.destroy()
-                    self._show_students()
-                else:
-                    messagebox.showerror("Erreur", "Échec de l'enregistrement du paiement.")
+                save_btn.configure(state="disabled")
+                amount_entry.configure(state="disabled")
+                loading_indicator.start("Traitement du paiement...")
+
+                def worker():
+                    success = False
+                    error_msg = None
+                    try:
+                        success = self.finance_service.record_payment(student_id, amount_usd)
+                    except Exception as ex:
+                        error_msg = str(ex)
+
+                    def finish():
+                        loading_indicator.stop()
+                        save_btn.configure(state="normal")
+                        amount_entry.configure(state="normal")
+                        if success:
+                            messagebox.showinfo("Succès", "Paiement enregistré avec succès.")
+                            dialog.destroy()
+                            self._render_current_view()
+                        else:
+                            if error_msg:
+                                messagebox.showerror("Erreur", f"Échec de l'enregistrement du paiement: {error_msg}")
+                            else:
+                                messagebox.showerror("Erreur", "Échec de l'enregistrement du paiement.")
+
+                    self.after(0, finish)
+
+                threading.Thread(target=worker, daemon=True).start()
             except Exception:
                 messagebox.showerror("Erreur", "Montant invalide.")
 
-        ctk.CTkButton(
+        save_btn = ctk.CTkButton(
             dialog,
             text="Enregistrer",
             fg_color=self.colors["success"],
             hover_color=self.colors["primary"],
             height=self._scaled(36),
             command=save_payment
-        ).pack(fill="x", padx=20, pady=(5, 15))
+        )
+        save_btn.pack(fill="x", padx=20, pady=(5, 15))
 
     def _open_payment_history_dialog(self, student: dict):
         """Ouvre la fenêtre d'historique de paiements par étudiant"""
@@ -2267,141 +2919,44 @@ class AdminDashboard(ctk.CTkFrame):
         self.title_label.configure(text=self._t("academic_years_title", "Années Académiques"))
         self.subtitle_label.configure(text=self._t("academic_years_subtitle", "Gestion des seuils financiers et périodes d'examens"))
         
-        # === Section: Année Académique Active ===
-        active_year = self.academic_year_service.get_active_year()
-        
-        year_card = self._create_card(self.content_frame, height=200)
-        year_card.pack(fill="x", pady=(0, 20))
-        
-        ctk.CTkLabel(
-            year_card,
-            text="📚 Année Académique Active",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=25, pady=(20, 15))
-        
-        if active_year:
-            # Frame pour les infos
-            info_frame = ctk.CTkFrame(year_card, fg_color=self.colors["border"], corner_radius=8)
-            info_frame.pack(fill="x", padx=25, pady=(0, 15))
-            
-            # Année
-            year_row = ctk.CTkFrame(info_frame, fg_color="transparent", height=40)
-            year_row.pack(fill="x", padx=15, pady=10)
-            year_row.pack_propagate(False)
-            ctk.CTkLabel(year_row, text="Année:", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.colors["text_dark"]).pack(side="left")
-            ctk.CTkLabel(year_row, text=active_year['year_name'], font=ctk.CTkFont(size=12), text_color=self.colors["text_light"]).pack(side="left", padx=(10, 0))
-            
-            # Seuil
-            threshold_row = ctk.CTkFrame(info_frame, fg_color="transparent", height=40)
-            threshold_row.pack(fill="x", padx=15, pady=10)
-            threshold_row.pack_propagate(False)
-            ctk.CTkLabel(threshold_row, text="Seuil Financier:", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.colors["text_dark"]).pack(side="left")
-            ctk.CTkLabel(threshold_row, text=f"{self._format_usd(active_year['threshold_amount'])}", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.colors["warning"]).pack(side="left", padx=(10, 0))
-            
-            # Frais finaux
-            fee_row = ctk.CTkFrame(info_frame, fg_color="transparent", height=40)
-            fee_row.pack(fill="x", padx=15, pady=10)
-            fee_row.pack_propagate(False)
-            ctk.CTkLabel(fee_row, text="Frais Finaux:", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.colors["text_dark"]).pack(side="left")
-            ctk.CTkLabel(fee_row, text=f"{self._format_usd(active_year['final_fee'])}", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.colors["success"]).pack(side="left", padx=(10, 0))
-            
-            # Validité partielle
-            validity_row = ctk.CTkFrame(info_frame, fg_color="transparent", height=40)
-            validity_row.pack(fill="x", padx=15, pady=(10, 15))
-            validity_row.pack_propagate(False)
-            ctk.CTkLabel(validity_row, text="Validité (paiement partiel):", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.colors["text_dark"]).pack(side="left")
-            ctk.CTkLabel(validity_row, text=f"{active_year['partial_valid_days']} jours", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.colors["info"]).pack(side="left", padx=(10, 0))
-        else:
-            ctk.CTkLabel(year_card, text="❌ Aucune année académique active", font=ctk.CTkFont(size=12), text_color=self.colors["danger"]).pack(anchor="w", padx=25, pady=10)
-        
-        # === Section: Mettre à jour les Seuils ===
-        threshold_card = self._create_card(self.content_frame)
-        threshold_card.pack(fill="x", pady=(0, 20))
-        
-        ctk.CTkLabel(
-            threshold_card,
-            text="⚙️ Mettre à jour les Seuils Financiers",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=25, pady=(20, 15))
-
-        channel_status = self.notification_service.get_channel_status()
-        email_status = "✅" if channel_status.get("email_configured") else "❌"
-        whatsapp_status = "✅" if channel_status.get("whatsapp_configured") else "❌"
-        ctk.CTkLabel(
-            threshold_card,
-            text=f"Notifications: Email {email_status} • WhatsApp {whatsapp_status}",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color=self.colors["info"] if channel_status.get("email_configured") or channel_status.get("whatsapp_configured") else self.colors["warning"]
-        ).pack(anchor="w", padx=25, pady=(0, 10))
-        
-        # Form pour mettre à jour
-        form_frame = ctk.CTkFrame(threshold_card, fg_color="transparent")
-        form_frame.pack(fill="x", padx=25, pady=(0, 20))
-        
-        # Nouveau seuil
-        ctk.CTkLabel(form_frame, text="Nouveau Seuil ($):", font=ctk.CTkFont(size=11, weight="bold"), text_color=self.colors["text_dark"]).pack(anchor="w", pady=(5, 2))
-        new_threshold_entry = ctk.CTkEntry(form_frame, placeholder_text="Ex: 1000", height=35, corner_radius=6)
-        new_threshold_entry.pack(fill="x", pady=(0, 15))
-        if active_year:
-            new_threshold_entry.insert(0, f"{self._fc_to_usd(active_year['threshold_amount']):.2f}")
-        
-        # Nouveaux frais finaux
-        ctk.CTkLabel(form_frame, text="Nouveaux Frais Finaux ($):", font=ctk.CTkFont(size=11, weight="bold"), text_color=self.colors["text_dark"]).pack(anchor="w", pady=(5, 2))
-        new_fee_entry = ctk.CTkEntry(form_frame, placeholder_text="Ex: 2000", height=35, corner_radius=6)
-        new_fee_entry.pack(fill="x", pady=(0, 20))
-        if active_year:
-            new_fee_entry.insert(0, f"{self._fc_to_usd(active_year['final_fee']):.2f}")
-        
-        # Buttons
-        button_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
-        button_frame.pack(fill="x")
-        
-        ctk.CTkButton(
-            button_frame,
-            text="💾 Mettre à jour",
-            fg_color=self.colors["primary"],
-            hover_color="#2563eb",
-            text_color=self.colors["text_white"],
-            command=lambda: self._update_thresholds(
-                new_threshold_entry.get(),
-                new_fee_entry.get(),
-                active_year['academic_year_id'] if active_year else None
-            ),
-            height=40,
-            corner_radius=8,
-            font=ctk.CTkFont(size=12, weight="bold")
-        ).pack(side="left", padx=(0, 10), fill="x", expand=True)
-        
-        ctk.CTkButton(
-            button_frame,
-            text="📢 Prévisualiser Notifications",
-            fg_color=self.colors["info"],
-            hover_color="#0891b2",
-            text_color=self.colors["text_white"],
-            command=lambda: self._preview_notifications(new_threshold_entry.get(), new_fee_entry.get()),
-            height=40,
-            corner_radius=8,
-            font=ctk.CTkFont(size=12, weight="bold")
-        ).pack(side="left", fill="x", expand=True)
-
-        # === Section: Frais par Promotion ===
+        # === Section: Frais & Seuils par Faculté → Promotion ===
         promo_card = self._create_card(self.content_frame)
         promo_card.pack(fill="both", expand=True, pady=(0, 20))
 
         ctk.CTkLabel(
             promo_card,
-            text="🎓 Frais Académiques par Promotion",
+            text="🎓 Frais & Seuils par Faculté → Promotion",
             font=ctk.CTkFont(size=16, weight="bold"),
             text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=25, pady=(20, 15))
+        ).pack(anchor="w", padx=25, pady=(20, 10))
 
-        promo_headers = ["Promotion", "Département", "Année", "Frais ($)", "Action"]
-        promo_weights = [3, 3, 1, 1, 1]
+        # Filtres faculté
+        filter_row = ctk.CTkFrame(promo_card, fg_color="transparent")
+        filter_row.pack(fill="x", padx=25, pady=(0, 10))
+
+        ctk.CTkLabel(
+            filter_row,
+            text="🏛️ Faculté:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(side="left", padx=(0, 10))
+
+        promotions = self.student_service.get_promotions_with_fees()
+        faculty_names = sorted({p.get("faculty_name") for p in promotions if p.get("faculty_name")})
+        faculty_filter = ctk.CTkComboBox(
+            filter_row,
+            values=["Toutes Facultés"] + faculty_names,
+            width=220,
+            height=32
+        )
+        faculty_filter.set("Toutes Facultés")
+        faculty_filter.pack(side="left")
+
+        promo_headers = ["Faculté", "Promotion", "Département", "Année", "Frais ($)", "Seuil ($)", "Action"]
+        promo_weights = [2, 3, 3, 1, 1, 1, 1]
         header_frame = ctk.CTkFrame(promo_card, fg_color=self.colors["border"], corner_radius=0)
         header_frame.pack(fill="x", padx=25, pady=(0, 0))
-        promo_anchors = ["w", "w", "center", "e", "center"]
+        promo_anchors = ["center"] * len(promo_headers)
         for col, header_text in enumerate(promo_headers):
             ctk.CTkLabel(
                 header_frame,
@@ -2409,43 +2964,61 @@ class AdminDashboard(ctk.CTkFrame):
                 font=ctk.CTkFont(size=11, weight="bold"),
                 text_color=self.colors["text_dark"],
                 anchor=promo_anchors[col]
-            ).grid(row=0, column=col, sticky="ew", padx=15, pady=10)
+            ).grid(row=0, column=col, sticky="ew", padx=10, pady=10)
         self._configure_table_columns(header_frame, promo_weights)
 
         promo_scroll = ctk.CTkScrollableFrame(promo_card, fg_color="transparent")
         promo_scroll.pack(fill="both", expand=True, padx=25, pady=(15, 20))
 
-        promotions = self.student_service.get_promotions_with_fees()
-        if not promotions:
-            ctk.CTkLabel(
-                promo_scroll,
-                text="Aucune promotion trouvée.",
-                font=ctk.CTkFont(size=12),
-                text_color=self.colors["text_light"]
-            ).pack(pady=20)
-        else:
-            for promo in promotions:
+        def render_promotions():
+            for widget in promo_scroll.winfo_children():
+                widget.destroy()
+
+            selected_faculty = faculty_filter.get()
+            filtered_promos = promotions
+            if selected_faculty != "Toutes Facultés":
+                filtered_promos = [p for p in promotions if p.get("faculty_name") == selected_faculty]
+
+            if not filtered_promos:
+                ctk.CTkLabel(
+                    promo_scroll,
+                    text="Aucune promotion trouvée pour cette faculté.",
+                    font=ctk.CTkFont(size=12),
+                    text_color=self.colors["text_light"]
+                ).pack(pady=20)
+                return
+
+            for promo in filtered_promos:
                 row = ctk.CTkFrame(promo_scroll, fg_color=self.colors["hover"], corner_radius=6)
                 row.pack(fill="x", pady=4)
                 self._configure_table_columns(row, promo_weights)
 
                 fee_value = promo.get('fee_usd') or 0
+                threshold_value = promo.get('threshold_amount') or 0
+
+                ctk.CTkLabel(
+                    row,
+                    text=promo.get('faculty_name') or "-",
+                    font=ctk.CTkFont(size=11),
+                    text_color=self.colors["text_light"],
+                    anchor="center"
+                ).grid(row=0, column=0, sticky="ew", padx=10, pady=6)
 
                 ctk.CTkLabel(
                     row,
                     text=promo.get('name') or "-",
                     font=ctk.CTkFont(size=11),
                     text_color=self.colors["text_dark"],
-                    anchor="w"
-                ).grid(row=0, column=0, sticky="ew", padx=15, pady=6)
+                    anchor="center"
+                ).grid(row=0, column=1, sticky="ew", padx=10, pady=6)
 
                 ctk.CTkLabel(
                     row,
                     text=promo.get('department_name') or "-",
                     font=ctk.CTkFont(size=11),
                     text_color=self.colors["text_light"],
-                    anchor="w"
-                ).grid(row=0, column=1, sticky="ew", padx=15, pady=6)
+                    anchor="center"
+                ).grid(row=0, column=2, sticky="ew", padx=10, pady=6)
 
                 ctk.CTkLabel(
                     row,
@@ -2453,24 +3026,108 @@ class AdminDashboard(ctk.CTkFrame):
                     font=ctk.CTkFont(size=11),
                     text_color=self.colors["text_dark"],
                     anchor="center"
-                ).grid(row=0, column=2, sticky="ew", padx=15, pady=6)
+                ).grid(row=0, column=3, sticky="ew", padx=10, pady=6)
 
-                fee_entry = ctk.CTkEntry(row, width=120)
+                fee_entry = ctk.CTkEntry(row, width=140, justify="center")
                 fee_entry.insert(0, f"{Decimal(str(fee_value)):.2f}")
-                fee_entry.grid(row=0, column=3, sticky="e", padx=15, pady=6)
+                fee_entry.grid(row=0, column=4, sticky="ew", padx=10, pady=6)
 
-                def make_save(promotion_id, entry_widget):
+                threshold_entry = ctk.CTkEntry(row, width=140, justify="center")
+                threshold_entry.insert(0, f"{Decimal(str(threshold_value)):.2f}")
+                threshold_entry.grid(row=0, column=5, sticky="ew", padx=10, pady=6)
+
+                def make_save(promotion_id, fee_widget, threshold_widget, save_btn_ref):
                     def _save():
                         try:
-                            value = Decimal(entry_widget.get().strip())
-                            if value < 0:
+                            fee_val = Decimal(fee_widget.get().strip())
+                            threshold_val = Decimal(threshold_widget.get().strip())
+                            if fee_val < 0 or threshold_val < 0:
                                 raise ValueError
-                            if self.student_service.update_promotion_fee(promotion_id, value):
-                                messagebox.showinfo("Succès", "Frais mis à jour.")
-                            else:
-                                messagebox.showerror("Erreur", "Échec de mise à jour.")
+                            if threshold_val > fee_val:
+                                messagebox.showerror(
+                                    "Erreur de Validation",
+                                    "Le seuil ne peut pas dépasser les frais académiques."
+                                )
+                                return
+                            
+                            # Afficher le loading dialog
+                            loading_dialog, loading_indicator = self._show_loading_dialog(
+                                "Mise à jour des frais et notifications..."
+                            )
+                            save_btn_ref.configure(state="disabled")
+                            fee_widget.configure(state="disabled")
+                            threshold_widget.configure(state="disabled")
+                            
+                            def worker():
+                                success = False
+                                notification_count = 0
+                                error_msg = None
+                                
+                                try:
+                                    # Récupérer les anciennes valeurs avant la mise à jour
+                                    old_promo = self.student_service.get_promotion_details(promotion_id)
+                                    old_fee = float(old_promo.get('fee_usd', 0)) if old_promo else 0
+                                    old_threshold = float(old_promo.get('threshold_amount', 0)) if old_promo else 0
+                                    
+                                    # Mettre à jour la BD
+                                    if self.student_service.update_promotion_financials(promotion_id, fee_val, threshold_val):
+                                        success = True
+                                        
+                                        # Récupérer les étudiants et envoyer les notifications
+                                        students = self.student_service.get_students_by_promotion(promotion_id)
+                                        if students:
+                                            for i, student in enumerate(students):
+                                                loading_indicator.set_status(
+                                                    f"Notification {i+1}/{len(students)}) aux étudiants..."
+                                                )
+                                                try:
+                                                    self.notification_service.send_threshold_change_notification(
+                                                        student_email=student.get('email'),
+                                                        student_phone=student.get('phone_number'),
+                                                        student_name=f"{student.get('firstname', '')} {student.get('lastname', '')}",
+                                                        old_threshold=old_threshold if old_threshold > 0 else None,
+                                                        new_threshold=float(threshold_val),
+                                                        old_final_fee=old_fee if old_fee > 0 else None,
+                                                        new_final_fee=float(fee_val)
+                                                    )
+                                                    notification_count += 1
+                                                except Exception as notif_err:
+                                                    logger.warning(f"Failed to notify student {student.get('id')}: {notif_err}")
+                                        
+                                except Exception as ex:
+                                    error_msg = str(ex)
+                                
+                                def finish():
+                                    loading_indicator.stop()
+                                    loading_dialog.destroy()
+                                    save_btn_ref.configure(state="normal")
+                                    fee_widget.configure(state="normal")
+                                    threshold_widget.configure(state="normal")
+                                    
+                                    if success:
+                                        if notification_count > 0:
+                                            messagebox.showinfo(
+                                                "Succès",
+                                                f"Frais et seuil mis à jour.\n{notification_count} notification(s) envoyée(s)."
+                                            )
+                                        else:
+                                            messagebox.showinfo(
+                                                "Succès",
+                                                "Frais et seuil mis à jour.\n(Aucun étudiant à notifier)"
+                                            )
+                                        self._show_academic_years()  # Rafraîchir la vue
+                                    else:
+                                        if error_msg:
+                                            messagebox.showerror("Erreur", f"Échec: {error_msg}")
+                                        else:
+                                            messagebox.showerror("Erreur", "Échec de mise à jour.")
+                                
+                                self.after(0, finish)
+                            
+                            threading.Thread(target=worker, daemon=True).start()
+                            
                         except Exception:
-                            messagebox.showerror("Erreur", "Montant invalide.")
+                            messagebox.showerror("Erreur", "Montants invalides.")
                     return _save
 
                 save_btn = ctk.CTkButton(
@@ -2480,9 +3137,15 @@ class AdminDashboard(ctk.CTkFrame):
                     fg_color=self.colors["primary"],
                     hover_color="#2563eb",
                     text_color=self.colors["text_white"],
-                    command=make_save(promo.get('id'), fee_entry)
+                    command=make_save(promo.get('id'), fee_entry, threshold_entry, None)
                 )
-                save_btn.grid(row=0, column=4, sticky="e", padx=15, pady=6)
+                save_btn.grid(row=0, column=6, sticky="ew", padx=10, pady=6)
+                
+                # Passer le bouton à la fonction make_save
+                save_btn.configure(command=make_save(promo.get('id'), fee_entry, threshold_entry, save_btn))
+
+        render_promotions()
+        faculty_filter.configure(command=lambda _value: render_promotions())
         
         # === Section: Périodes d'Examens ===
         exam_card = self._create_card(self.content_frame)
@@ -2554,6 +3217,18 @@ class AdminDashboard(ctk.CTkFrame):
             new_threshold = new_threshold_usd
             new_fee = new_fee_usd
             
+            # VALIDATION CRITIQUE : Le seuil ne peut JAMAIS dépasser les frais académiques
+            if new_threshold > new_fee:
+                messagebox.showerror(
+                    "Erreur de Validation",
+                    f"Le seuil financier (${float(new_threshold):,.2f}) ne peut pas dépasser \n"
+                    f"les frais académiques totaux (${float(new_fee):,.2f}).\n\n"
+                    f"Le seuil représente le minimum à payer pour accéder aux examens.\n"
+                    f"Les frais totaux sont le montant complèt à payer dans l'année.\n\n"
+                    f"Veuillez corriger les valeurs."
+                )
+                return
+            
             if not academic_year_id:
                 messagebox.showerror("Erreur", "Aucune année académique active")
                 return
@@ -2586,8 +3261,8 @@ class AdminDashboard(ctk.CTkFrame):
                               f"Nouveaux frais: ${float(new_fee_usd):,.2f}\n\n"
                               f"{notif_line}")
             
-            # Recharger
-            self._show_academic_years()
+            # Recharger la vue en cours (rafraîchissement automatique)
+            self._render_current_view()
             
         except (ValueError, TypeError):
             messagebox.showerror("Erreur", "Veuillez entrer des montants valides (nombres)")

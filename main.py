@@ -27,8 +27,7 @@ try:
             
             self.title("U.O.R - Système de Contrôle d'Accès")
             self.geometry("1200x700")
-            self.minsize(800, 600)
-            
+            self.minsize(800, 600)        
             self.current_screen = None
             self.login_screen = None
             self.dashboard = None

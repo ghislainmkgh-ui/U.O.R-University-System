@@ -27,19 +27,32 @@ EMAIL_SERVICE = os.getenv("EMAIL_SERVICE", "gmail")  # ou autre
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 
-# WhatsApp (Twilio)
-WHATSAPP_ACCOUNT_SID = os.getenv("WHATSAPP_ACCOUNT_SID", "")
-WHATSAPP_AUTH_TOKEN = os.getenv("WHATSAPP_AUTH_TOKEN", "")
-WHATSAPP_FROM = os.getenv("WHATSAPP_FROM", "")
+# WhatsApp (Twilio - legacy)
+WHATSAPP_ACCOUNT_SID = os.getenv("WHATSAPP_ACCOUNT_SID", os.getenv("TWILIO_ACCOUNT_SID", ""))
+WHATSAPP_AUTH_TOKEN = os.getenv("WHATSAPP_AUTH_TOKEN", os.getenv("TWILIO_AUTH_TOKEN", ""))
+WHATSAPP_FROM = os.getenv("WHATSAPP_FROM", os.getenv("TWILIO_WHATSAPP_FROM", ""))
+
+# Ultramsg WhatsApp API
+ULTRAMSG_INSTANCE_ID = os.getenv("ULTRAMSG_INSTANCE_ID", "")
+ULTRAMSG_TOKEN = os.getenv("ULTRAMSG_TOKEN", "")
 
 # WhatsApp Templates (optional - for pre-approved content Messages)
 WHATSAPP_TEMPLATE_ACCESS_CODE = os.getenv("WHATSAPP_TEMPLATE_ACCESS_CODE", "")
 WHATSAPP_TEMPLATE_THRESHOLD_ALERT = os.getenv("WHATSAPP_TEMPLATE_THRESHOLD_ALERT", "")
 WHATSAPP_USE_TEMPLATES = os.getenv("WHATSAPP_USE_TEMPLATES", "False").lower() == "true"
 
+# Email branding
+EMAIL_LOGO_PATH = os.getenv("EMAIL_LOGO_PATH", "")
+
 # Arduino
 ARDUINO_PORT = os.getenv("ARDUINO_PORT", "COM3")
 ARDUINO_BAUD_RATE = int(os.getenv("ARDUINO_BAUD_RATE", 9600))
+
+# ESP32 (Wi-Fi Socket)
+ESP32_HOST = os.getenv("ESP32_HOST", "127.0.0.1")
+ESP32_PORT = int(os.getenv("ESP32_PORT", 5050))
+ESP32_SOCKET_TIMEOUT = float(os.getenv("ESP32_SOCKET_TIMEOUT", 1.5))
+ESP32_STATUS_REFRESH_MS = int(os.getenv("ESP32_STATUS_REFRESH_MS", 5000))
 
 # Application
 APP_NAME = "U.O.R - Plateforme d'Accès aux Examens"

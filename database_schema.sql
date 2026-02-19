@@ -36,8 +36,10 @@ CREATE TABLE IF NOT EXISTS promotion (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     year INT NOT NULL,
+    description TEXT,
     department_id INT NOT NULL,
-    fee_usd DECIMAL(10, 2) DEFAULT 0.00,
+    fee_usd DECIMAL(10, 2) DEFAULT 0.00 COMMENT 'Frais académiques finaux de la promotion',
+    threshold_amount DECIMAL(10, 2) DEFAULT 0.00 COMMENT 'Seuil minimum requis pour éligibilité',
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -48,6 +50,18 @@ CREATE TABLE IF NOT EXISTS promotion (
     CONSTRAINT fk_promotion_department FOREIGN KEY (department_id) REFERENCES department(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Créer la table AcademicYear (Année académique)
+CREATE TABLE IF NOT EXISTS academic_year (
+    academic_year_id INT AUTO_INCREMENT PRIMARY KEY,
+    year_name VARCHAR(50) NOT NULL UNIQUE,
+    threshold_amount DECIMAL(15, 2) NOT NULL,
+    final_fee DECIMAL(15, 2) NOT NULL,
+    partial_valid_days INT DEFAULT 30,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Créer la table Student (Étudiant)
 CREATE TABLE IF NOT EXISTS student (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -55,9 +69,11 @@ CREATE TABLE IF NOT EXISTS student (
     firstname VARCHAR(255) NOT NULL,
     lastname VARCHAR(255) NOT NULL,
     email VARCHAR(255),
+    phone_number VARCHAR(20) DEFAULT NULL,
     passport_photo_path VARCHAR(512) DEFAULT NULL,
     passport_photo_blob LONGBLOB,
     promotion_id INT NOT NULL,
+    academic_year_id INT DEFAULT NULL,
     password_hash VARCHAR(255) NOT NULL,
     face_encoding LONGBLOB,
     is_active BOOLEAN DEFAULT TRUE,
@@ -66,9 +82,11 @@ CREATE TABLE IF NOT EXISTS student (
     INDEX idx_student_number (student_number),
     INDEX idx_email (email),
     INDEX idx_promotion (promotion_id),
+    INDEX idx_academic_year (academic_year_id),
     INDEX idx_active (is_active),
     INDEX idx_lastname (lastname),
-    CONSTRAINT fk_student_promotion FOREIGN KEY (promotion_id) REFERENCES promotion(id) ON DELETE CASCADE
+    CONSTRAINT fk_student_promotion FOREIGN KEY (promotion_id) REFERENCES promotion(id) ON DELETE CASCADE,
+    CONSTRAINT fk_student_academic_year FOREIGN KEY (academic_year_id) REFERENCES academic_year(academic_year_id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Créer la table FinanceProfile (Profil Financier)
@@ -79,11 +97,18 @@ CREATE TABLE IF NOT EXISTS finance_profile (
     threshold_required DECIMAL(10, 2) NOT NULL,
     last_payment_date DATETIME,
     is_eligible BOOLEAN DEFAULT FALSE,
+    academic_year_id INT DEFAULT NULL,
+    access_code_issued_at TIMESTAMP NULL DEFAULT NULL,
+    access_code_expires_at TIMESTAMP NULL DEFAULT NULL,
+    access_code_type ENUM('full', 'partial') DEFAULT NULL,
+    final_fee DECIMAL(15, 2) DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_eligible (is_eligible),
     INDEX idx_amount (amount_paid),
-    CONSTRAINT fk_finance_student FOREIGN KEY (student_id) REFERENCES student(id) ON DELETE CASCADE
+    INDEX idx_finance_academic_year (academic_year_id),
+    CONSTRAINT fk_finance_student FOREIGN KEY (student_id) REFERENCES student(id) ON DELETE CASCADE,
+    CONSTRAINT fk_finance_academic_year FOREIGN KEY (academic_year_id) REFERENCES academic_year(academic_year_id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Créer la table AccessLog (Journal d'Accès)

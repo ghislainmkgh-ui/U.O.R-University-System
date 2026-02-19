@@ -1,9 +1,22 @@
 """Service de notification par email et WhatsApp"""
 import logging
 import smtplib
+import os
+import requests
+from email.mime.image import MIMEImage
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from config.settings import EMAIL_SERVICE, EMAIL_ADDRESS, EMAIL_PASSWORD, WHATSAPP_ACCOUNT_SID, WHATSAPP_AUTH_TOKEN, WHATSAPP_FROM, USD_EXCHANGE_RATE_FC
+from config.settings import (
+    EMAIL_SERVICE, EMAIL_ADDRESS, EMAIL_PASSWORD, 
+    WHATSAPP_ACCOUNT_SID, WHATSAPP_AUTH_TOKEN, WHATSAPP_FROM,
+    ULTRAMSG_INSTANCE_ID, ULTRAMSG_TOKEN,
+    EMAIL_LOGO_PATH
+)
+
+try:
+    from twilio.rest import Client
+except ImportError:  # pragma: no cover - optional dependency
+    Client = None
 
 logger = logging.getLogger(__name__)
 
@@ -17,46 +30,103 @@ class NotificationService:
         self.whatsapp_sid = WHATSAPP_ACCOUNT_SID
         self.whatsapp_token = WHATSAPP_AUTH_TOKEN
         self.whatsapp_from = WHATSAPP_FROM
+        self.ultramsg_instance = ULTRAMSG_INSTANCE_ID
+        self.ultramsg_token = ULTRAMSG_TOKEN
+        self.email_logo_path = EMAIL_LOGO_PATH
+
+    def get_channel_status(self) -> dict:
+        """Retourne l'état de configuration des notifications"""
+        email_ok = bool(self.email_address and self.email_password)
+        whatsapp_ok = bool(self.ultramsg_instance and self.ultramsg_token)
+        return {
+            "email_configured": email_ok,
+            "whatsapp_configured": whatsapp_ok
+        }
     
     def send_payment_notification(self, student_email: str, student_phone: str,
                                  student_name: str, amount_paid: float,
-                                 remaining_amount: float, final_fee: float) -> bool:
-        """Envoie une notification de paiement par email et WhatsApp"""
+                                 remaining_amount: float, final_fee: float,
+                                 threshold_amount: float = None,
+                                 threshold_reached: bool = None,
+                                 promotion_info: str = None) -> bool:
+        """Envoie une notification de paiement par email et WhatsApp
+        
+        Args:
+            promotion_info: Chaîne formatée "Faculté / Département / Promotion" pour affichage
+        """
         try:
-            def to_usd(amount_fc: float) -> float:
-                return amount_fc / float(USD_EXCHANGE_RATE_FC or 1)
-
-            amount_paid_usd = to_usd(amount_paid)
-            remaining_usd = to_usd(max(remaining_amount, 0))
-            final_fee_usd = to_usd(final_fee)
+            amount_paid_usd = float(amount_paid)
+            remaining_usd = float(max(remaining_amount, 0))
+            final_fee_usd = float(final_fee)
+            threshold_usd = float(threshold_amount) if threshold_amount is not None else None
 
             completion_msg = ""
             if remaining_amount <= 0:
                 completion_msg = "\n\nFélicitations! Vous avez fini les frais académiques."
 
+            threshold_status = None
+            if threshold_reached is not None:
+                threshold_status = "Atteint" if threshold_reached else "Non atteint"
+
             subject = "Notification de Paiement - U.O.R"
+            table_rows = []
+            
+            # Ajouter info de promotion en premier si disponible
+            if promotion_info:
+                table_rows.append(("Promotion", promotion_info))
+            
+            table_rows.extend([
+                ("Montant payé", f"${amount_paid_usd:,.2f}"),
+                ("Total des frais académiques", f"${final_fee_usd:,.2f}"),
+                ("Montant restant", f"${remaining_usd:,.2f}"),
+            ])
+            if threshold_usd is not None:
+                table_rows.append(("Seuil requis", f"${threshold_usd:,.2f}"))
+            if threshold_status:
+                table_rows.append(("Statut du seuil", threshold_status))
+
             body = f"""
 Bonjour {student_name},
 
 Votre paiement a été reçu avec succès.
 
-Montant payé (cumul): ${amount_paid_usd:,.2f}
-Total des frais académiques: ${final_fee_usd:,.2f}
-Montant restant: ${remaining_usd:,.2f}{completion_msg}
+{self._build_text_table(table_rows)}{completion_msg}
+""".strip()
 
-Cordialement,
-U.O.R - Système de Contrôle d'Accès
-            """.strip()
+            if threshold_status == "Non atteint":
+                body += "\n\nNote: Vous n'avez pas encore atteint le seuil financier requis pour l'accès aux examens."
 
-            whatsapp_msg = (
-                f"Bonjour {student_name}, paiement reçu. "
-                f"Payé: ${amount_paid_usd:,.2f}, "
-                f"reste: ${remaining_usd:,.2f}."
-            )
+            body += "\n\nCordialement,\nU.O.R - Système de Contrôle d'Accès"
+
+            whatsapp_rows = []
+            if promotion_info:
+                whatsapp_rows.append(("Promo", promotion_info))
+            whatsapp_rows.extend([
+                ("Payé", f"${amount_paid_usd:,.2f}"),
+                ("Reste", f"${remaining_usd:,.2f}"),
+            ])
+            if threshold_usd is not None:
+                whatsapp_rows.append(("Seuil", f"${threshold_usd:,.2f}"))
+            if threshold_status:
+                whatsapp_rows.append(("Statut", threshold_status))
+
+            whatsapp_msg = f"Bonjour {student_name}, paiement reçu.\n{self._build_text_table(whatsapp_rows)}"
             if remaining_amount <= 0:
                 whatsapp_msg += " Félicitations! Vous avez fini les frais académiques."
+            if threshold_status == "Non atteint":
+                whatsapp_msg += " Vous n'avez pas encore atteint le seuil requis."
 
-            email_ok = self._send_email(student_email, subject, body)
+            html_body = self._build_payment_email_html(
+                student_name=student_name,
+                amount_paid=amount_paid_usd,
+                final_fee=final_fee_usd,
+                remaining=remaining_usd,
+                completion_msg=completion_msg,
+                threshold_amount=threshold_usd,
+                threshold_status=threshold_status,
+                promotion_info=promotion_info,
+            )
+            email_ok = self._send_email(student_email, subject, body, html_body=html_body, logo_path=self.email_logo_path)
             whatsapp_ok = self._send_whatsapp(student_phone, whatsapp_msg)
             return email_ok or whatsapp_ok
             
@@ -87,6 +157,60 @@ U.O.R - Système de Contrôle d'Accès
             logger.error(f"Error preparing access denied notification: {e}")
             return False
 
+    def send_welcome_notification(self, student_email: str, student_phone: str,
+                                  student_name: str, student_number: str,
+                                  threshold_required: float, final_fee: float) -> bool:
+        """Envoie une notification de bienvenue au nouvel étudiant"""
+        try:
+            subject = "Bienvenue à U.O.R - Informations importantes"
+            body = f"""
+Bonjour {student_name},
+
+Bienvenue à l'Université Officielle de Ruwenzori (U.O.R) !
+
+Votre inscription a été enregistrée avec succès.
+
+📋 INFORMATIONS DE VOTRE COMPTE:
+• Numéro étudiant: {student_number}
+• Email: {student_email}
+• Téléphone: {student_phone}
+
+💰 INFORMATIONS FINANCIÈRES:
+• Seuil pour accès aux examens: ${threshold_required:,.2f}
+• Frais académiques totaux: ${final_fee:,.2f}
+
+ℹ️ IMPORTANT:
+Pour accéder aux salles d'examens, vous devez:
+1. Effectuer un paiement atteignant au moins le seuil requis
+2. Un code d'accès vous sera automatiquement envoyé par email/WhatsApp
+3. Présentez ce code au terminal d'accès le jour de l'examen
+
+Vous recevrez une notification automatique après chaque paiement.
+
+En cas de question, contactez l'administration.
+
+Cordialement,
+U.O.R - Système de Contrôle d'Accès
+            """.strip()
+
+            whatsapp_msg = (
+                f"Bienvenue {student_name} à l'Université Officielle de Ruwenzori (U.O.R)! "
+                f"Numéro étudiant: {student_number}. "
+                f"Seuil examens: ${threshold_required:,.2f}. "
+                f"Frais totaux: ${final_fee:,.2f}. "
+                f"Un code d'accès vous sera envoyé par email/WhatsApp après paiement du seuil."
+            )
+
+            email_ok = self._send_email(student_email, subject, body)
+            whatsapp_ok = self._send_whatsapp(student_phone, whatsapp_msg)
+
+            logger.info(f"Welcome notification sent to {student_name} - Email: {email_ok}, WhatsApp: {whatsapp_ok}")
+            return email_ok or whatsapp_ok
+
+        except Exception as e:
+            logger.error(f"Error preparing welcome notification: {e}")
+            return False
+
     def send_access_code_notification(self, student_email: str, student_phone: str,
                                       student_name: str, access_code: str,
                                       code_type: str, expires_at: str) -> bool:
@@ -96,7 +220,7 @@ U.O.R - Système de Contrôle d'Accès
             if code_type == 'full':
                 validity_msg = "Ce code est valable durant toutes les périodes d'examens de l'année académique."
             else:
-                validity_msg = f"Ce code est valable jusqu'au {expires_at}."
+                validity_msg = "Ce code est valable jusqu'à modification du seuil financier."
             
             subject = "Votre code d'accès - U.O.R"
             body = f"""
@@ -126,61 +250,126 @@ U.O.R - Système de Contrôle d'Accès
             return False
 
     def send_threshold_change_notification(self, student_email: str, student_phone: str,
-                                          student_name: str, old_threshold: float, 
-                                          new_threshold: float) -> bool:
+                                          student_name: str, old_threshold: float = None,
+                                          new_threshold: float = None, old_final_fee: float = None,
+                                          new_final_fee: float = None, amount_paid: float = None,
+                                          remaining_amount: float = None, threshold_reached: bool = None) -> bool:
         """Notifie l'étudiant du changement de seuil financier"""
         try:
-            def to_usd(amount_fc: float) -> float:
-                return amount_fc / float(USD_EXCHANGE_RATE_FC or 1)
+            old_usd = float(old_threshold) if old_threshold is not None else None
+            new_usd = float(new_threshold) if new_threshold is not None else None
+            old_fee_usd = float(old_final_fee) if old_final_fee is not None else None
+            new_fee_usd = float(new_final_fee) if new_final_fee is not None else None
+            amount_paid_usd = float(amount_paid) if amount_paid is not None else None
+            remaining_usd = float(remaining_amount) if remaining_amount is not None else None
 
-            old_usd = to_usd(old_threshold)
-            new_usd = to_usd(new_threshold)
+            threshold_status = None
+            if threshold_reached is not None:
+                threshold_status = "Atteint" if threshold_reached else "Non atteint"
 
             subject = "Mise à jour du seuil financier - Action requise - U.O.R"
-            body = f"""
-Bonjour {student_name},
+            body_lines = [
+                f"Bonjour {student_name},",
+                "",
+                "Le seuil financier pour l'accès aux examens a été mis à jour.",
+                ""
+            ]
 
-Le seuil financier pour l'accès aux examens a été mis à jour.
+            table_rows = []
+            if old_usd is not None:
+                table_rows.append(("Ancien seuil", f"${old_usd:,.2f}"))
+            if new_usd is not None:
+                table_rows.append(("Nouveau seuil", f"${new_usd:,.2f}"))
+            if old_fee_usd is not None:
+                table_rows.append(("Anciens frais", f"${old_fee_usd:,.2f}"))
+            if new_fee_usd is not None:
+                table_rows.append(("Nouveaux frais", f"${new_fee_usd:,.2f}"))
+            if amount_paid_usd is not None:
+                table_rows.append(("Montant payé", f"${amount_paid_usd:,.2f}"))
+            if remaining_usd is not None:
+                table_rows.append(("Montant restant", f"${max(remaining_usd, 0):,.2f}"))
+            if threshold_status:
+                table_rows.append(("Statut du seuil", threshold_status))
 
-Ancien seuil: ${old_usd:,.2f}
-Nouveau seuil: ${new_usd:,.2f}
+            if table_rows:
+                body_lines.append(self._build_text_table(table_rows))
 
-IMPORTANT: Si vous aviez un code d'accès temporaire (paiement partiel), celui-ci a été invalidé. 
-Veuillez effectuer un nouveau paiement pour atteindre le nouveau seuil et obtenir un code valide.
+            body_lines.extend([
+                "",
+                "IMPORTANT: Si vous aviez un code d'accès temporaire (paiement partiel), celui-ci a été invalidé.",
+                "Veuillez effectuer un nouveau paiement pour atteindre le nouveau seuil et obtenir un code valide.",
+                "",
+                "Les étudiants ayant payé intégralement conservent leur code valable toute l'année.",
+                "",
+                "Cordialement,",
+                "U.O.R - Système de Contrôle d'Accès"
+            ])
+            body = "\n".join(body_lines).strip()
 
-Les étudiants ayant payé intégralement conservent leur code valable toute l'année.
+            parts = [f"Bonjour {student_name}, mise à jour du seuil financier."]
+            if old_usd is not None and new_usd is not None:
+                parts.append(f"Seuil: ${old_usd:,.2f} → ${new_usd:,.2f}.")
+            elif new_usd is not None:
+                parts.append(f"Nouveau seuil: ${new_usd:,.2f}.")
+            if old_fee_usd is not None and new_fee_usd is not None:
+                parts.append(f"Frais: ${old_fee_usd:,.2f} → ${new_fee_usd:,.2f}.")
+            elif new_fee_usd is not None:
+                parts.append(f"Nouveaux frais: ${new_fee_usd:,.2f}.")
+            if threshold_status:
+                parts.append(f"Statut seuil: {threshold_status}.")
+            parts.append("Votre code temporaire a été invalidé si applicable.")
 
-Cordialement,
-U.O.R - Système de Contrôle d'Accès
-            """.strip()
-            
-            whatsapp_msg = f"Bonjour {student_name}, le seuil financier a changé de ${old_usd:,.2f} à ${new_usd:,.2f}. Votre code temporaire a été invalidé si applicable."
-            
-            email_ok = self._send_email(student_email, subject, body)
+            whatsapp_table = self._build_text_table(table_rows) if table_rows else ""
+            whatsapp_msg = " ".join(parts)
+            if whatsapp_table:
+                whatsapp_msg += f"\n{whatsapp_table}"
+
+            html_body = self._build_threshold_change_email_html(
+                student_name=student_name,
+                rows=table_rows,
+                threshold_status=threshold_status
+            )
+
+            email_ok = self._send_email(student_email, subject, body, html_body=html_body, logo_path=self.email_logo_path)
             whatsapp_ok = self._send_whatsapp(student_phone, whatsapp_msg)
-            
+
             logger.info(f"Threshold change notification sent to {student_name} - Email: {email_ok}, WhatsApp: {whatsapp_ok}")
             return email_ok or whatsapp_ok
-            
+
         except Exception as e:
             logger.error(f"Error preparing threshold change notification: {e}")
             return False
     
-    def _send_email(self, recipient: str, subject: str, body: str) -> bool:
+    def _send_email(self, recipient: str, subject: str, body: str, html_body: str = None, logo_path: str = None) -> bool:
         """Envoie un email"""
         try:
             if not self.email_address or not self.email_password:
                 logger.warning("Email service not configured")
                 return False
-            
-            msg = MIMEMultipart()
+
+            use_logo = bool(logo_path and os.path.exists(logo_path))
+            if html_body or use_logo:
+                msg = MIMEMultipart('related')
+                alt = MIMEMultipart('alternative')
+                alt.attach(MIMEText(body, 'plain'))
+                if html_body:
+                    alt.attach(MIMEText(html_body, 'html'))
+                msg.attach(alt)
+                if use_logo:
+                    with open(logo_path, 'rb') as f:
+                        img = MIMEImage(f.read())
+                    img.add_header('Content-ID', '<uor_logo>')
+                    img.add_header('Content-Disposition', 'inline', filename=os.path.basename(logo_path))
+                    msg.attach(img)
+            else:
+                msg = MIMEMultipart()
+                msg.attach(MIMEText(body, 'plain'))
             msg['From'] = self.email_address
             msg['To'] = recipient
             msg['Subject'] = subject
-            msg.attach(MIMEText(body, 'plain'))
             
             # Configurer le serveur SMTP
-            smtp_server = smtplib.SMTP('smtp.gmail.com', 587)
+            smtp_server = smtplib.SMTP('smtp.gmail.com', 587, timeout=10)
             smtp_server.starttls()
             smtp_server.login(self.email_address, self.email_password)
             
@@ -195,37 +384,158 @@ U.O.R - Système de Contrôle d'Accès
             return False
 
     def _send_whatsapp(self, student_phone: str, message: str) -> bool:
-        """Envoie un message WhatsApp via Twilio"""
+        """Envoie un message WhatsApp via Ultramsg"""
         try:
             if not student_phone:
                 logger.warning("No phone number provided")
                 return False
                 
-            if not self.whatsapp_sid or not self.whatsapp_token or not self.whatsapp_from:
-                logger.warning("WhatsApp service not configured")
+            if not self.ultramsg_instance or not self.ultramsg_token:
+                logger.warning("Ultramsg WhatsApp service not configured")
                 return False
 
-            try:
-                from twilio.rest import Client
-            except ImportError:
-                logger.warning("Twilio library not installed. Install with: pip install twilio")
+            # Normaliser le numéro de téléphone
+            to_number = str(student_phone).strip()
+            if to_number.lower().startswith("whatsapp:"):
+                to_number = to_number.split("whatsapp:", 1)[1]
+            to_number = to_number.replace(" ", "").replace("-", "")
+            
+            # S'assurer que le numéro commence par +
+            if not to_number.startswith("+"):
+                to_number = "+" + to_number
+            
+            # API Ultramsg
+            url = f"https://api.ultramsg.com/{self.ultramsg_instance}/messages/chat"
+            payload = {
+                "token": self.ultramsg_token,
+                "to": to_number,
+                "body": message
+            }
+            
+            response = requests.post(url, data=payload, timeout=10)
+            response.raise_for_status()
+            
+            result = response.json()
+            if result.get("sent") == "true" or result.get("sent") == True:
+                logger.info(f"WhatsApp sent successfully to {student_phone} via Ultramsg")
+                return True
+            else:
+                logger.warning(f"Ultramsg response: {result}")
                 return False
-
-            client = Client(self.whatsapp_sid, self.whatsapp_token)
             
-            # Send message using standard API (not content templates)
-            msg = client.messages.create(
-                body=message,
-                from_=f"whatsapp:{self.whatsapp_from}",
-                to=f"whatsapp:{student_phone}"
-            )
-            
-            logger.info(f"WhatsApp sent successfully to {student_phone} (SID: {msg.sid})")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error sending WhatsApp: {e}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error sending WhatsApp via Ultramsg: {e}")
             return False
+        except Exception as e:
+            logger.error(f"Unexpected error sending WhatsApp: {e}")
+            return False
+
+    def _build_payment_email_html(self, student_name: str, amount_paid: float, final_fee: float,
+                                   remaining: float, completion_msg: str,
+                                   threshold_amount: float = None, threshold_status: str = None,
+                                   promotion_info: str = None) -> str:
+        """Construit le HTML pour l'email de paiement"""
+        logo_html = ""
+        if self.email_logo_path and os.path.exists(self.email_logo_path):
+            logo_html = "<div style='margin-bottom:16px;'><img src='cid:uor_logo' alt='U.O.R' style='height:64px;'/></div>"
+
+        completion_html = ""
+        if completion_msg:
+            completion_html = "<p style='color:#059669;font-weight:600;'>Félicitations ! Vous avez fini les frais académiques.</p>"
+
+        promotion_row = ""
+        if promotion_info:
+            promotion_row = f"<tr><td style=\"padding:6px 12px;\">Promotion</td><td style=\"padding:6px 12px;\"><strong>{promotion_info}</strong></td></tr>"
+        
+        threshold_row = ""
+        if threshold_amount is not None:
+            threshold_row += f"<tr><td style=\"padding:6px 12px;\">Seuil requis</td><td style=\"padding:6px 12px;\"><strong>${threshold_amount:,.2f}</strong></td></tr>"
+        if threshold_status:
+            threshold_row += f"<tr><td style=\"padding:6px 12px;\">Statut du seuil</td><td style=\"padding:6px 12px;\"><strong>{threshold_status}</strong></td></tr>"
+
+        return f"""
+<div style="font-family:Arial, sans-serif; color:#111;">
+    {logo_html}
+    <p>Bonjour <strong>{student_name}</strong>,</p>
+    <p>Votre paiement a été reçu avec succès.</p>
+    <table style="border-collapse:collapse; margin:12px 0;">
+        {promotion_row}
+        <tr><td style="padding:6px 12px;">Montant payé</td><td style="padding:6px 12px;"><strong>${amount_paid:,.2f}</strong></td></tr>
+        <tr><td style="padding:6px 12px;">Total des frais académiques</td><td style="padding:6px 12px;"><strong>${final_fee:,.2f}</strong></td></tr>
+        <tr><td style="padding:6px 12px;">Montant restant</td><td style="padding:6px 12px;"><strong>${remaining:,.2f}</strong></td></tr>
+        {threshold_row}
+    </table>
+    {completion_html}
+    <p>Cordialement,<br/>U.O.R - Système de Contrôle d'Accès</p>
+</div>
+                """.strip()
+
+    def _build_threshold_change_email_html(self, student_name: str, rows: list,
+                                           threshold_status: str = None) -> str:
+        """Construit le HTML pour l'email de changement de seuil"""
+        logo_html = ""
+        if self.email_logo_path and os.path.exists(self.email_logo_path):
+            logo_html = "<div style='margin-bottom:16px;'><img src='cid:uor_logo' alt='U.O.R' style='height:64px;'/></div>"
+
+        table_html = ""
+        if rows:
+            table_rows = "".join(
+                f"<tr><td style='padding:6px 12px;'>{label}</td><td style='padding:6px 12px;'><strong>{value}</strong></td></tr>"
+                for label, value in rows
+            )
+            table_html = f"<table style='border-collapse:collapse; margin:12px 0;'>{table_rows}</table>"
+
+        threshold_note = ""
+        if threshold_status == "Non atteint":
+            threshold_note = "<p style='color:#b45309;font-weight:600;'>Vous n'avez pas encore atteint le nouveau seuil.</p>"
+
+        return f"""
+<div style="font-family:Arial, sans-serif; color:#111;">
+    {logo_html}
+    <p>Bonjour <strong>{student_name}</strong>,</p>
+    <p>Le seuil financier pour l'accès aux examens a été mis à jour.</p>
+    {table_html}
+    {threshold_note}
+    <p style="margin-top:12px;">IMPORTANT: Si vous aviez un code d'accès temporaire (paiement partiel), celui-ci a été invalidé.</p>
+    <p>Veuillez effectuer un nouveau paiement pour atteindre le nouveau seuil et obtenir un code valide.</p>
+    <p>Les étudiants ayant payé intégralement conservent leur code valable toute l'année.</p>
+    <p>Cordialement,<br/>U.O.R - Système de Contrôle d'Accès</p>
+</div>
+                """.strip()
+
+    def _build_text_table(self, rows: list) -> str:
+        """Construit une table texte robuste (lisible en email/WhatsApp)."""
+        if not rows:
+            return ""
+
+        def _truncate(value: str, max_len: int) -> str:
+            value = str(value)
+            if len(value) <= max_len:
+                return value
+            return value[: max_len - 1] + "…"
+
+        header = ["Élément", "Valeur"]
+        max_col1 = 20
+        max_col2 = 26
+
+        table_rows = [header] + [[str(label), str(value)] for label, value in rows]
+        col1 = min(max(len(r[0]) for r in table_rows), max_col1)
+        col2 = min(max(len(r[1]) for r in table_rows), max_col2)
+
+        def fmt_row(left: str, right: str) -> str:
+            left = _truncate(left, col1).ljust(col1)
+            right = _truncate(right, col2).ljust(col2)
+            return f"│ {left} │ {right} │"
+
+        top = f"┌{'─' * (col1 + 2)}┬{'─' * (col2 + 2)}┐"
+        mid = f"├{'─' * (col1 + 2)}┼{'─' * (col2 + 2)}┤"
+        bot = f"└{'─' * (col1 + 2)}┴{'─' * (col2 + 2)}┘"
+
+        parts = [top, fmt_row(header[0], header[1]), mid]
+        for label, value in rows:
+            parts.append(fmt_row(label, value))
+        parts.append(bot)
+        return "\n".join(parts)
 
     def send_whatsapp_with_template(self, student_phone: str, template_sid: str, 
                                    template_variables: list = None) -> bool:

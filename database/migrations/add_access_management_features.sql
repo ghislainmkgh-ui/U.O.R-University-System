@@ -8,6 +8,9 @@ ALTER TABLE student
 ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20) DEFAULT NULL AFTER email;
 
 ALTER TABLE student
+ADD COLUMN IF NOT EXISTS academic_year_id INT DEFAULT NULL AFTER promotion_id;
+
+ALTER TABLE student
 ADD COLUMN IF NOT EXISTS passport_photo_path VARCHAR(512) DEFAULT NULL AFTER phone_number;
 
 ALTER TABLE student
@@ -29,6 +32,10 @@ CREATE TABLE IF NOT EXISTS academic_year (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+ALTER TABLE student
+ADD CONSTRAINT fk_student_academic_year FOREIGN KEY (academic_year_id)
+    REFERENCES academic_year(academic_year_id) ON DELETE SET NULL;
 
 -- =====================================================
 -- 3. CREATE EXAM_PERIOD TABLE
@@ -73,6 +80,7 @@ CREATE TABLE IF NOT EXISTS student_face_encoding (
 -- 6. INDEXES FOR PERFORMANCE
 -- =====================================================
 CREATE INDEX IF NOT EXISTS idx_student_phone ON student(phone_number);
+CREATE INDEX IF NOT EXISTS idx_student_academic_year ON student(academic_year_id);
 CREATE INDEX IF NOT EXISTS idx_finance_academic_year ON finance_profile(academic_year_id);
 CREATE INDEX IF NOT EXISTS idx_finance_access_code_type ON finance_profile(access_code_type);
 CREATE INDEX IF NOT EXISTS idx_exam_period_dates ON exam_period(start_date, end_date);

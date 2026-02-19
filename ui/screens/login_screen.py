@@ -1,6 +1,8 @@
 """Écran de connexion moderne avec design two-column"""
 import customtkinter as ctk
 import logging
+import os
+from PIL import Image
 from tkinter import messagebox
 from ui.i18n.translator import Translator
 from ui.theme.theme_manager import ThemeManager
@@ -29,7 +31,6 @@ class LoginScreen(ctk.CTkFrame):
             self.is_standalone = True
             self.pack(fill="both", expand=True)
             root.title("U.O.R - Système de Contrôle d'Accès")
-            root.geometry("1000x680")
             logger.info("LoginScreen created as standalone window")
         
         self.selected_language = "FR"
@@ -39,212 +40,178 @@ class LoginScreen(ctk.CTkFrame):
         self.dashboard_open = False  # Flag pour éviter les ouvertures multiples
         
         self._create_ui()
+        self._set_window_size()
     
     def _set_window_size(self):
         """Configure la taille de la fenêtre"""
         # Obtenir les dimensions de l'écran
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
+        top = self.winfo_toplevel()
+        screen_width = top.winfo_screenwidth()
+        screen_height = top.winfo_screenheight()
         
-        # Taille optimale (max 90% de l'écran)
-        window_width = min(1000, int(screen_width * 0.9))
-        window_height = min(680, int(screen_height * 0.85))
+        # Taille fixe (ne jamais dépasser ce format)
+        window_width = 860
+        window_height = 760
         
         # Centrer la fenêtre
         x = (screen_width - window_width) // 2
         y = (screen_height - window_height) // 2
         
-        self.geometry(f"{window_width}x{window_height}+{x}+{y}")
-        self.resizable(True, True)
-        self.minsize(600, 500)  # Taille minimale pour garder l'interface utilisable
+        top.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        top.resizable(True, True)
         
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
     
     def _create_ui(self):
-        """Crée l'interface de connexion avec design two-column"""
+        """Crée l'interface de connexion modernisée (style carte centrée)"""
         # Main container
-        main_frame = ctk.CTkFrame(self, fg_color="white")
+        main_frame = ctk.CTkFrame(self, fg_color="#59c2cf")
         main_frame.pack(fill="both", expand=True)
         main_frame.grid_columnconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(1, weight=1)
         main_frame.grid_rowconfigure(0, weight=1)
-        
-        # LEFT COLUMN - Form
-        left_frame = ctk.CTkFrame(main_frame, fg_color="white")
-        left_frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
-        left_frame.grid_columnconfigure(0, weight=1)
-        left_frame.grid_rowconfigure(0, weight=0)
-        left_frame.grid_rowconfigure(1, weight=1)
-        left_frame.grid_rowconfigure(2, weight=0)
-        
+
         # Language selector (top right)
-        lang_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
-        lang_frame.grid(row=0, column=0, sticky="ne", padx=30, pady=20)
-        
+        lang_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        lang_frame.place(relx=1, rely=0, x=-24, y=18, anchor="ne")
+
         self.lang_switch = ctk.CTkSegmentedButton(
             lang_frame,
             values=["FR", "EN"],
             command=self._on_language_change,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#e5e5e5",
-            selected_color="#FF4444",
-            selected_hover_color="#E63333",
-            text_color="#333333"
+            font=ctk.CTkFont(size=10, weight="bold"),
+            fg_color="#8ed6df",
+            selected_color="#0b3d4f",
+            selected_hover_color="#0a3342",
+            text_color="#0b3d4f"
         )
         self.lang_switch.set(self.selected_language)
         self.lang_switch.pack(side="left")
-        
-        # Form container (centered vertically)
-        form_container = ctk.CTkFrame(left_frame, fg_color="transparent")
-        form_container.grid(row=1, column=0, sticky="nsew", padx=50)
-        form_container.grid_columnconfigure(0, weight=1)
-        
+
+        # Center card
+        card_outer = ctk.CTkFrame(
+            main_frame,
+            fg_color="#3f7f90",
+            corner_radius=8,
+            border_width=2,
+            border_color="#a6dbe1"
+        )
+        card_outer.place(relx=0.5, rely=0.5, anchor="center")
+
+        card_inner = ctk.CTkFrame(
+            card_outer,
+            fg_color="#2c5f6f",
+            corner_radius=6,
+            border_width=1,
+            border_color="#6fb3bf"
+        )
+        card_inner.pack(padx=18, pady=18)
+
+        card_content = ctk.CTkFrame(card_inner, fg_color="transparent")
+        card_content.pack(padx=28, pady=26)
+
+        # Icon circle
+        icon_ring = ctk.CTkFrame(card_content, fg_color="#2c5f6f", corner_radius=36, border_width=2, border_color="#8ed6df")
+        icon_ring.pack(pady=(0, 12))
+        ctk.CTkLabel(icon_ring, text="📷", font=ctk.CTkFont(size=22), text_color="#8ed6df").pack(padx=14, pady=10)
+
         # Title
         ctk.CTkLabel(
-            form_container,
-            text="Log in",
-            font=ctk.CTkFont(size=32, weight="bold"),
-            text_color="#1a1a1a"
-        ).pack(anchor="w", pady=(0, 30))
-        
-        # Username/Email field
+            card_content,
+            text="USER LOGIN",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="#cfeff2"
+        ).pack(pady=(0, 16))
+
+        # Email field
         ctk.CTkLabel(
-            form_container,
-            text="Username or Email",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#333333"
-        ).pack(anchor="w", pady=(0, 8))
-        
+            card_content,
+            text="Email ID",
+            font=ctk.CTkFont(size=11),
+            text_color="#bde3ea"
+        ).pack(anchor="w")
+
         self.entry_username = ctk.CTkEntry(
-            form_container,
-            placeholder_text="Enter your username or email",
-            height=45,
-            corner_radius=6,
-            border_width=1,
-            border_color="#e0e0e0",
-            fg_color="white",
-            text_color="#1a1a1a",
+            card_content,
+            placeholder_text="",
+            height=34,
+            corner_radius=2,
+            border_width=0,
+            fg_color="#2c5f6f",
+            text_color="#e8f7f9",
             font=ctk.CTkFont(size=12)
         )
-        self.entry_username.pack(fill="x", pady=(0, 20))
+        self.entry_username.pack(fill="x", pady=(2, 12))
         self.entry_username.insert(0, "admin")
-        
+
         # Password field
         ctk.CTkLabel(
-            form_container,
+            card_content,
             text="Password",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#333333"
-        ).pack(anchor="w", pady=(0, 8))
-        
+            font=ctk.CTkFont(size=11),
+            text_color="#bde3ea"
+        ).pack(anchor="w")
+
         self.entry_password = ctk.CTkEntry(
-            form_container,
-            placeholder_text="Enter your password",
-            height=45,
+            card_content,
+            placeholder_text="",
+            height=34,
             show="•",
-            corner_radius=6,
-            border_width=1,
-            border_color="#e0e0e0",
-            fg_color="white",
-            text_color="#1a1a1a",
+            corner_radius=2,
+            border_width=0,
+            fg_color="#2c5f6f",
+            text_color="#e8f7f9",
             font=ctk.CTkFont(size=12)
         )
-        self.entry_password.pack(fill="x", pady=(0, 15))
+        self.entry_password.pack(fill="x", pady=(2, 12))
         self.entry_password.insert(0, "admin123")
-        
+
         # Remember me + Forgot password
-        checkbox_frame = ctk.CTkFrame(form_container, fg_color="transparent")
-        checkbox_frame.pack(fill="x", pady=(0, 25))
-        
+        checkbox_frame = ctk.CTkFrame(card_content, fg_color="transparent")
+        checkbox_frame.pack(fill="x", pady=(2, 14))
+
         ctk.CTkCheckBox(
             checkbox_frame,
             text="Remember me",
-            checkbox_height=16,
-            checkbox_width=16,
-            font=ctk.CTkFont(size=11),
-            text_color="#666666"
+            checkbox_height=14,
+            checkbox_width=14,
+            font=ctk.CTkFont(size=10),
+            text_color="#bde3ea",
+            fg_color="#8ed6df",
+            hover_color="#7ccad6",
+            border_color="#8ed6df"
         ).pack(side="left")
-        
+
         ctk.CTkLabel(
             checkbox_frame,
             text="Forgot Password?",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#FF4444",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color="#cfeff2",
             cursor="hand2"
         ).pack(side="right")
-        
+
         # Status label
         self.status_label = ctk.CTkLabel(
-            form_container,
+            card_content,
             text="",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#FF4444"
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color="#ffb4b4"
         )
-        self.status_label.pack(fill="x", pady=(0, 15))
-        
+        self.status_label.pack(fill="x", pady=(0, 10))
+
         # Login button
         self.login_btn = ctk.CTkButton(
-            form_container,
-            text="Sign In",
-            height=50,
-            font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color="#FF4444",
-            hover_color="#E63333",
-            text_color="white",
-            corner_radius=6,
+            card_content,
+            text="LOGIN",
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#0a2230",
+            hover_color="#071923",
+            text_color="#e8f7f9",
+            corner_radius=2,
             command=self._on_login
         )
-        self.login_btn.pack(fill="x", pady=(0, 20))
-        
-        # Sign up link
-        signup_frame = ctk.CTkFrame(form_container, fg_color="transparent")
-        signup_frame.pack(fill="x")
-        
-        ctk.CTkLabel(
-            signup_frame,
-            text="Don't have an account? ",
-            font=ctk.CTkFont(size=11),
-            text_color="#666666"
-        ).pack(side="left")
-        
-        ctk.CTkLabel(
-            signup_frame,
-            text="Sign Up",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#FF4444",
-            cursor="hand2"
-        ).pack(side="left")
-        
-        # RIGHT COLUMN - Banner
-        right_frame = ctk.CTkFrame(main_frame, fg_color="#3a2551")
-        right_frame.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
-        right_frame.grid_columnconfigure(0, weight=1)
-        right_frame.grid_rowconfigure(0, weight=1)
-        
-        # Banner content
-        content_frame = ctk.CTkFrame(right_frame, fg_color="transparent")
-        content_frame.grid(row=0, column=0, sticky="nsew", padx=40, pady=40)
-        content_frame.grid_columnconfigure(0, weight=1)
-        content_frame.grid_rowconfigure(0, weight=1)
-        content_frame.grid_rowconfigure(1, weight=0)
-        
-        # Welcome text
-        ctk.CTkLabel(
-            content_frame,
-            text="Welcome To\nU.O.R Platform",
-            font=ctk.CTkFont(size=36, weight="bold"),
-            text_color="white",
-            justify="center"
-        ).grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
-        
-        # Subtitle
-        ctk.CTkLabel(
-            content_frame,
-            text="Exam Access & Management System",
-            font=ctk.CTkFont(size=14),
-            text_color="#cccccc"
-        ).grid(row=1, column=0, sticky="ew", padx=20, pady=(20, 0))
+        self.login_btn.pack(fill="x")
     
     def _on_language_change(self, value):
         """Change la langue de l'interface"""

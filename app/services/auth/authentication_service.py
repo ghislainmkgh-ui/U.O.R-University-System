@@ -17,6 +17,20 @@ class AuthenticationService:
         self.db = DatabaseConnection()
         self.password_hasher = PasswordHasher()
         self.validators = Validators()
+
+    def _get_table_columns(self, table_name: str) -> set:
+        try:
+            query = """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = %s
+            """
+            rows = self.db.execute_query(query, (table_name,)) or []
+            return {row.get("COLUMN_NAME") for row in rows if row.get("COLUMN_NAME")}
+        except Exception as e:
+            logger.error(f"Error fetching columns for {table_name}: {e}")
+            return set()
     
     def register_student(self, student: Student, password: str) -> bool:
         """
@@ -139,7 +153,7 @@ class AuthenticationService:
         """Génère un mot de passe temporaire non communiqué"""
         return secrets.token_urlsafe(24)
 
-    def register_student_with_face(self, student: Student, password: Optional[str], face_encoding: bytes) -> int:
+    def register_student_with_face(self, student: Student, password: Optional[str], face_encoding: Optional[bytes]) -> int:
         """
         Enregistre un nouvel étudiant avec encodage facial
 
@@ -163,26 +177,31 @@ class AuthenticationService:
 
             password_hash = self.password_hasher.hash_password(password_to_hash)
 
-            query = """
-                INSERT INTO student (
-                    student_number, firstname, lastname, email, phone_number, promotion_id,
-                    passport_photo_path, passport_photo_blob, password_hash, face_encoding
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            params = (
-                student.student_number,
-                student.firstname,
-                student.lastname,
-                student.email,
-                student.phone_number,
-                student.promotion_id,
-                student.passport_photo_path,
-                student.passport_photo_blob,
-                password_hash,
-                face_encoding
-            )
+            columns = self._get_table_columns("student")
+            insert_columns = []
+            insert_values = []
 
-            self.db.execute_update(query, params)
+            def add_column(name, value):
+                if name in columns:
+                    insert_columns.append(name)
+                    insert_values.append(value)
+
+            add_column("student_number", student.student_number)
+            add_column("firstname", student.firstname)
+            add_column("lastname", student.lastname)
+            add_column("email", student.email)
+            add_column("phone_number", student.phone_number)
+            add_column("promotion_id", student.promotion_id)
+            add_column("passport_photo_path", student.passport_photo_path)
+            add_column("passport_photo_blob", student.passport_photo_blob)
+            add_column("password_hash", password_hash)
+            add_column("face_encoding", face_encoding)
+            add_column("academic_year_id", student.academic_year_id)
+
+            placeholders = ", ".join(["%s"] * len(insert_columns))
+            columns_sql = ", ".join(insert_columns)
+            query = f"INSERT INTO student ({columns_sql}) VALUES ({placeholders})"
+            self.db.execute_update(query, tuple(insert_values))
 
             result = self.db.execute_query(
                 "SELECT id FROM student WHERE student_number = %s",
@@ -193,7 +212,10 @@ class AuthenticationService:
                 return 0
 
             student_id = result[0]["id"]
-            logger.info(f"Student {student.student_number} registered with face encoding")
+            if face_encoding is None:
+                logger.info(f"Student {student.student_number} registered without face encoding")
+            else:
+                logger.info(f"Student {student.student_number} registered with face encoding")
             return student_id
 
         except Exception as e:

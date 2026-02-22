@@ -1,0 +1,23 @@
+title = "U.O.R University System Secret Scan"
+
+[allowlist]
+regexes = [
+  "<TWILIO_ACCOUNT_SID>",
+  "<TWILIO_AUTH_TOKEN>",
+  "<TWILIO_WHATSAPP_FROM>",
+  "<token_32_caracteres>",
+  "<ton_nouveau_token>",
+  "<ancien_token>",
+  "your_auth_token_here",
+  "your-auth-token",
+  "your-secret-key-change-in-production",
+  "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "instance_xxxxx",
+  "REDACTED",
+  "xxxx\\s+xxxx\\s+xxxx\\s+xxxx"
+]
+
+paths = [
+  ".gitleaks.toml",
+  ".secrets-allowlist"
+]

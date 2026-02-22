@@ -56,7 +56,7 @@ Verify in `config/settings.py`:
 ```python
 EMAIL_SERVICE = 'gmail'
 EMAIL_ADDRESS = 'your-email@gmail.com'
-EMAIL_PASSWORD = 'your-app-password'
+# Define your app password in settings (not shown here)
 ```
 
 #### WhatsApp (New - requires setup)
@@ -73,9 +73,9 @@ pip install twilio
 
 3. Update `config/settings.py`:
 ```python
-WHATSAPP_ACCOUNT_SID = 'your_account_sid'
-WHATSAPP_AUTH_TOKEN = 'your_auth_token'
-WHATSAPP_FROM = '+1234567890'  # Your Twilio WhatsApp number
+WHATSAPP_ACCOUNT_SID = '<TWILIO_ACCOUNT_SID>'
+WHATSAPP_AUTH_TOKEN = '<TWILIO_AUTH_TOKEN>'
+WHATSAPP_FROM = '<TWILIO_WHATSAPP_FROM>'  # Your Twilio WhatsApp number
 ```
 
 ### Step 5: Update Student Phone Numbers

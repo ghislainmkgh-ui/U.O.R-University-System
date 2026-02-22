@@ -109,6 +109,67 @@ class AuthenticationService:
         except Exception as e:
             logger.error(f"Error authenticating student: {e}")
             return None
+
+    def authenticate_admin(self, username: str, password: str) -> dict:
+        """Authentifie un administrateur"""
+        try:
+            query = "SELECT * FROM administrator WHERE username = %s AND is_active = 1"
+            results = self.db.execute_query(query, (username,))
+
+            if not results:
+                logger.warning(f"Authentication failed: Admin {username} not found")
+                return None
+
+            admin = results[0]
+
+            if not self.password_hasher.verify_password(password, admin['password_hash']):
+                logger.warning(f"Authentication failed: Wrong password for admin {username}")
+                return None
+
+            logger.info(f"Admin {username} authenticated successfully")
+            return admin
+        except Exception as e:
+            logger.error(f"Error authenticating admin: {e}")
+            return None
+
+    def authenticate(self, identifier: str, password: str):
+        """Authentifie par numéro d'étudiant ou email.
+
+        Returns:
+            (user_dict, error_message)
+        """
+        if not identifier or not password:
+            return None, "Please enter credentials"
+
+        # 1) Try admin
+        admin = self.authenticate_admin(identifier, password)
+        if admin:
+            admin["role"] = "admin"
+            return admin, None
+
+        # 2) Try student number
+        user = self.authenticate_student(identifier, password)
+        if user:
+            user["role"] = "student"
+            return user, None
+
+        # 3) Try email
+        try:
+            query = "SELECT * FROM student WHERE email = %s"
+            results = self.db.execute_query(query, (identifier,))
+            if not results:
+                return None, "Invalid credentials"
+
+            student = results[0]
+            if not self.password_hasher.verify_password(password, student['password_hash']):
+                return None, "Invalid credentials"
+
+            student["role"] = "student"
+            logger.info(f"Student {student.get('email')} authenticated successfully")
+            return student, None
+        except Exception as e:
+            logger.error(f"Error authenticating by email: {e}")
+            return None, "Authentication error"
     
     def change_password(self, student_number: str, old_password: str, new_password: str) -> bool:
         """

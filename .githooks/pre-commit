@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+PY="$ROOT/.venv/Scripts/python.exe"
+
+if [ -x "$PY" ]; then
+  "$PY" "$ROOT/scripts/scan_secrets.py"
+else
+  python "$ROOT/scripts/scan_secrets.py"
+fi

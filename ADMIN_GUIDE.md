@@ -30,9 +30,9 @@
 ### Étape 4: Configurer Application
 Éditer `config/settings.py`:
 ```python
-WHATSAPP_ACCOUNT_SID = 'ACxxxxxxxxxxxxxxxxxxxx'  # Votre Account SID
-WHATSAPP_AUTH_TOKEN = 'votre_auth_token'         # Votre Auth Token
-WHATSAPP_FROM = '+14155238886'                    # Numéro sandbox Twilio
+WHATSAPP_ACCOUNT_SID = '<TWILIO_ACCOUNT_SID>'     # Votre Account SID
+WHATSAPP_AUTH_TOKEN = '<TWILIO_AUTH_TOKEN>'       # Votre Auth Token
+WHATSAPP_FROM = '<TWILIO_WHATSAPP_FROM>'          # Numéro sandbox Twilio
 ```
 
 ### Étape 5: Tester

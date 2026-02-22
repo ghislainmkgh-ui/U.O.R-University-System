@@ -22,19 +22,19 @@ Erreur actuelle: "Unable to create record: Authenticate"
    • Auth Token: [masqué] avec un bouton "Show"
 
 5. Clique sur "Show" pour révéler le token
-6. COPIE le token (32 caractères, ex: d41d8cd98f00b204e9800998ecf8427e)
+6. COPIE le token (32 caractères, ex: <token_32_caracteres>)
 
 ╔════════════════════════════════════════════════════════════════════╗
 ║              ÉTAPE 2: METTRE À JOUR LE FICHIER .env                ║
 ╚════════════════════════════════════════════════════════════════════╝
 
 1. Ouvre le fichier: E:\\SECRET FILES\\MY_TFC\\.env
-2. Cherche la ligne: TWILIO_AUTH_TOKEN=CVFBWQ4YH3EGDJVA4P4ZW4R7
+2. Cherche la ligne: TWILIO_AUTH_TOKEN=<ton_nouveau_token>
 3. Remplace par: TWILIO_AUTH_TOKEN=<ton_nouveau_token>
 
 Exemple:
-AVANT: TWILIO_AUTH_TOKEN=CVFBWQ4YH3EGDJVA4P4ZW4R7
-APRÈS: TWILIO_AUTH_TOKEN=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+AVANT: TWILIO_AUTH_TOKEN=<ancien_token>
+APRÈS: TWILIO_AUTH_TOKEN=<ton_nouveau_token>
 
 ⚠️  IMPORTANT: Pas de guillemets, pas d'espaces!
 

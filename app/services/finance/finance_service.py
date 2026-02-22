@@ -1,6 +1,7 @@
 """Service de gestion des finances"""
 import logging
 import random
+import threading
 from decimal import Decimal
 from datetime import datetime, timedelta
 from typing import Optional
@@ -273,22 +274,27 @@ class FinanceService:
             if remaining_amount < 0:
                 remaining_amount = Decimal("0")
 
-            # Envoyer notification avec info de promotion
-            self.notification_service.send_payment_notification(
-                student_email=promo.get('email'),
-                student_phone=promo.get('phone_number'),
-                student_name=f"{promo.get('firstname')} {promo.get('lastname')}",
-                amount_paid=float(new_amount),
-                remaining_amount=float(remaining_amount),
-                final_fee=float(final_fee),
-                threshold_amount=float(threshold),
-                threshold_reached=bool(is_eligible),
-                promotion_info=f"{faculty_name} / {department_name} / {promotion_name}"
-            )
+            def _notify_async():
+                try:
+                    self.notification_service.send_payment_notification(
+                        student_email=promo.get('email'),
+                        student_phone=promo.get('phone_number'),
+                        student_name=f"{promo.get('firstname')} {promo.get('lastname')}",
+                        amount_paid=float(new_amount),
+                        remaining_amount=float(remaining_amount),
+                        final_fee=float(final_fee),
+                        threshold_amount=float(threshold),
+                        threshold_reached=bool(is_eligible),
+                        promotion_info=f"{faculty_name} / {department_name} / {promotion_name}"
+                    )
 
-            if is_eligible:
-                is_full_paid = new_amount >= final_fee
-                self._issue_access_code_if_needed(student_id, is_full_paid)
+                    if is_eligible:
+                        is_full_paid = new_amount >= final_fee
+                        self._issue_access_code_if_needed(student_id, is_full_paid)
+                except Exception as notify_err:
+                    logger.warning(f"Notification async error: {notify_err}")
+
+            threading.Thread(target=_notify_async, daemon=True).start()
 
             logger.info(f"Payment recorded for student {student_id} ({promotion_name}): {amount}")
             return True

@@ -24,7 +24,7 @@ class DashboardService:
         try:
             db = self.db_connection.get_connection()
             cursor = db.cursor()
-            cursor.execute("SELECT COUNT(*) FROM student WHERE is_active = 1")
+            cursor.execute("SELECT COUNT(*) FROM student WHERE COALESCE(is_active, 1) = 1")
             result = cursor.fetchone()
             cursor.close()
             db.close()
@@ -42,9 +42,9 @@ class DashboardService:
             cursor = db.cursor()
             cursor.execute("""
                 SELECT COUNT(DISTINCT pf.student_id)
-                FROM finance_profile pf
-                JOIN student e ON pf.student_id = e.id
-                WHERE pf.is_eligible = 1 AND e.is_active = 1
+                FROM student e
+                LEFT JOIN finance_profile pf ON pf.student_id = e.id
+                WHERE COALESCE(e.is_active, 1) = 1 AND COALESCE(pf.is_eligible, 0) = 1
             """)
             result = cursor.fetchone()
             cursor.close()
@@ -62,10 +62,10 @@ class DashboardService:
             db = self.db_connection.get_connection()
             cursor = db.cursor()
             cursor.execute("""
-                SELECT COUNT(DISTINCT pf.student_id)
-                FROM finance_profile pf
-                JOIN student e ON pf.student_id = e.id
-                WHERE pf.is_eligible = 0 AND e.is_active = 1
+                SELECT COUNT(DISTINCT e.id)
+                FROM student e
+                LEFT JOIN finance_profile pf ON pf.student_id = e.id
+                WHERE COALESCE(e.is_active, 1) = 1 AND COALESCE(pf.is_eligible, 0) = 0
             """)
             result = cursor.fetchone()
             cursor.close()
@@ -140,6 +140,7 @@ class DashboardService:
         if not self.db_connection:
             return []
         try:
+            safe_limit = max(1, min(int(limit), 50))
             db = self.db_connection.get_connection()
             cursor = db.cursor(dictionary=True)
             cursor.execute(f"""
@@ -153,7 +154,7 @@ class DashboardService:
                 FROM access_log al
                 JOIN student e ON al.student_id = e.id
                 ORDER BY al.created_at DESC
-                LIMIT {limit}
+                LIMIT {safe_limit}
             """)
             results = cursor.fetchall()
             activities = []
@@ -182,11 +183,11 @@ class DashboardService:
             cursor = db.cursor()
             cursor.execute("""
                 SELECT 
-                    COUNT(*) as total,
-                    SUM(CASE WHEN is_eligible = 1 THEN 1 ELSE 0 END) as eligible
-                FROM finance_profile pf
-                JOIN student e ON pf.student_id = e.id
-                WHERE e.is_active = 1
+                    COUNT(DISTINCT e.id) as total,
+                    SUM(CASE WHEN COALESCE(pf.is_eligible, 0) = 1 THEN 1 ELSE 0 END) as eligible
+                FROM student e
+                LEFT JOIN finance_profile pf ON pf.student_id = e.id
+                WHERE COALESCE(e.is_active, 1) = 1
             """)
             result = cursor.fetchone()
             cursor.close()

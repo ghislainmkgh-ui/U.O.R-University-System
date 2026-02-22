@@ -1,8 +1,19 @@
 """Vérifier quel numéro WhatsApp est connecté à l'instance Ultramsg"""
-import requests
+import os
 
-INSTANCE_ID = "instance_xxxxx"
-TOKEN = "REDACTED_ULTRAMSG_TOKEN"
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
+INSTANCE_ID = os.getenv("ULTRAMSG_INSTANCE_ID")
+TOKEN = os.getenv("ULTRAMSG_TOKEN")
+
+if not INSTANCE_ID or not TOKEN:
+    raise SystemExit(
+        "ULTRAMSG_INSTANCE_ID/ULTRAMSG_TOKEN manquants. "
+        "Renseignez-les dans votre .env (non versionné)."
+    )
 
 print("=" * 60)
 print("VÉRIFICATION DU COMPTE WHATSAPP CONNECTÉ")

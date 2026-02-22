@@ -255,9 +255,9 @@ pip install twilio
 3. Activer WhatsApp sandbox pour test
 4. Mettre à jour `config/settings.py`:
 ```python
-WHATSAPP_ACCOUNT_SID = 'ACxxxx...'
-WHATSAPP_AUTH_TOKEN = 'xxxx...'
-WHATSAPP_FROM = '+1234567890'
+WHATSAPP_ACCOUNT_SID = '<TWILIO_ACCOUNT_SID>'
+WHATSAPP_AUTH_TOKEN = '<TWILIO_AUTH_TOKEN>'
+WHATSAPP_FROM = '<TWILIO_WHATSAPP_FROM>'
 ```
 
 ### Étape 6: Tester les Notifications

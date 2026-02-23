@@ -46,12 +46,16 @@ class ErrorManager:
             "Invalid payment amount: {details}"
         ),
         "payment_exceeds_limit": (
-            "Le montant dépasse la limite autorisée pour cet étudiant.",
+            "Le montant saisi dépasse ce qui reste à payer pour cet étudiant.",
             "Payment exceeds limit: {details}"
         ),
         "payment_already_paid": (
             "Cet étudiant a déjà complété tous ses paiements.",
             "Payment attempt for fully paid student: {details}"
+        ),
+        "payment_no_active_fees": (
+            "Aucun frais académique n'est défini pour cette promotion. Le paiement ne peut pas être enregistré.",
+            "Payment rejected: No active academic fees for student: {details}"
         ),
         "payment_processing": (
             "Une erreur s'est produite lors du traitement du paiement.",
@@ -3268,11 +3272,20 @@ class AdminDashboard(ctk.CTkFrame):
                         year = self.academic_year_service.get_year_by_id(finance.get("academic_year_id"))
                         if year:
                             final_fee = year.get("final_fee")
-                    final_fee = Decimal(str(final_fee or finance.get("threshold_required") or 0))
+                    final_fee = Decimal(str(final_fee or 0))
                     current_paid = Decimal(str(finance.get("amount_paid") or 0))
                     
+                    # Vérifier si des frais académiques sont définis
+                    if final_fee <= 0:
+                        ErrorManager.show_error(
+                            "payment_no_active_fees",
+                            f"Student {student_id} promotion has no active academic fees",
+                            dialog
+                        )
+                        return
+                    
                     # Vérifier si l'étudiant a déjà tout payé
-                    if final_fee > 0 and current_paid >= final_fee:
+                    if current_paid >= final_fee:
                         ErrorManager.show_error(
                             "payment_already_paid",
                             f"Student {student_id} has already paid ${current_paid:.2f} (total: ${final_fee:.2f})",
@@ -3281,13 +3294,14 @@ class AdminDashboard(ctk.CTkFrame):
                         return
                     
                     # Vérifier si le montant dépasse la limite
-                    if final_fee > 0 and (current_paid + amount_usd) > final_fee:
+                    if (current_paid + amount_usd) > final_fee:
                         remaining = final_fee - current_paid
                         if remaining < 0:
                             remaining = Decimal("0")
-                        messagebox.showerror(
-                            "Erreur",
-                            f"Paiement refusé. Montant restant: ${remaining:.2f}."
+                        ErrorManager.show_error(
+                            "payment_exceeds_limit",
+                            f"Payment amount ${amount_usd} exceeds remaining balance ${remaining:.2f}",
+                            dialog
                         )
                         return
 

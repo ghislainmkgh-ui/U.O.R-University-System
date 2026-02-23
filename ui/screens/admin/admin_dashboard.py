@@ -33,36 +33,36 @@ class Tooltip(ctk.CTkToplevel):
         super().__init__(widget)
         self.widget = widget
         self.text = text
-        self.withdraw()
+        self.overrideredirect(True)  # Remove window decorations
         
         # Configuration
         self.attributes("-topmost", True)
-        try:
-            self.attributes("-type", "tooltip")
-        except:
-            pass
+        self.configure(fg_color="transparent")
         
-        # Label
+        # Label with background
         label = ctk.CTkLabel(
             self,
             text=text,
             fg_color="#1e293b",
             text_color="#f8fafc",
-            padx=8,
-            pady=4,
-            font=ctk.CTkFont(size=10, weight="bold"),
-            corner_radius=4
+            padx=10,
+            pady=6,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            corner_radius=6
         )
         label.pack()
         
-        # Position below the widget
+        # Position next to the widget (to the right)
         self.update_idletasks()
-        x = widget.winfo_rootx() + widget.winfo_width() + 5
-        y = widget.winfo_rooty() + (widget.winfo_height() // 2) - (label.winfo_height() // 2)
+        x = widget.winfo_rootx() + widget.winfo_width() + 10
+        y = widget.winfo_rooty() + (widget.winfo_height() // 2) - (self.winfo_height() // 2)
         self.geometry(f"+{x}+{y}")
         
+        # Show it
+        self.deiconify()
+        
         # Schedule destruction
-        self.after(2500, self.destroy)
+        self.after(2000, self.destroy)
 
 
 class AdminDashboard(ctk.CTkFrame):

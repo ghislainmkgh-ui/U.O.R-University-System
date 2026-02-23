@@ -171,7 +171,7 @@ Bienvenue à l'Université Officielle de Ruwenzori (U.O.R) !
 Votre inscription a été enregistrée avec succès.
 
 📋 INFORMATIONS DE VOTRE COMPTE:
-• Numéro étudiant: {student_number}
+• Matricule étudiant: {student_number}
 • Email: {student_email}
 • Téléphone: {student_phone}
 
@@ -195,7 +195,7 @@ U.O.R - Système de Contrôle d'Accès
 
             whatsapp_msg = (
                 f"Bienvenue {student_name} à l'Université Officielle de Ruwenzori (U.O.R)! "
-                f"Numéro étudiant: {student_number}. "
+                f"Matricule étudiant: {student_number}. "
                 f"Seuil examens: ${threshold_required:,.2f}. "
                 f"Frais totaux: ${final_fee:,.2f}. "
                 f"Un code d'accès vous sera envoyé par email/WhatsApp après paiement du seuil."

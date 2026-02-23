@@ -2532,7 +2532,7 @@ class AdminDashboard(ctk.CTkFrame):
             entry.grid(row=row + 1, column=col, columnspan=col_span, sticky="ew", padx=4, pady=(0, 4))
             return entry
 
-        student_number_entry = add_labeled_entry(identity_frame, "Numéro étudiant *", "STU2026-001", row=0, col=0)
+        student_number_entry = add_labeled_entry(identity_frame, "Matricule étudiant *", "STU2026-001", row=0, col=0)
         firstname_entry = add_labeled_entry(identity_frame, "Prénom *", "Jean", row=0, col=1)
         lastname_entry = add_labeled_entry(identity_frame, "Nom *", "Dupont", row=2, col=0)
         email_entry = add_labeled_entry(identity_frame, "Email *", "jean@uor.rw", row=2, col=1)
@@ -2929,7 +2929,7 @@ class AdminDashboard(ctk.CTkFrame):
                 entry.insert(0, value)
             return entry
 
-        student_number_entry = add_labeled_entry("Numéro étudiant", details.get("student_number", ""), "Ex: STU2026-001", row=0, col=0)
+        student_number_entry = add_labeled_entry("Matricule étudiant", details.get("student_number", ""), "Ex: STU2026-001", row=0, col=0)
         firstname_entry = add_labeled_entry("Prénom", details.get("firstname", ""), "Ex: Jean", row=0, col=1)
         lastname_entry = add_labeled_entry("Nom", details.get("lastname", ""), "Ex: Dupont", row=2, col=0)
         email_entry = add_labeled_entry("Email", details.get("email", ""), "Ex: jean@uor.rw", row=2, col=1)

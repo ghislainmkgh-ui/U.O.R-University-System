@@ -41,7 +41,7 @@ TRANSLATIONS = {
         "dashboard_subtitle": "Vue d'ensemble",
         
         # Étudiants
-        "student_number": "Numéro d'Étudiant",
+        "student_number": "Matricule d'Étudiant",
         "firstname": "Prénom",
         "lastname": "Nom",
         "email": "Email",

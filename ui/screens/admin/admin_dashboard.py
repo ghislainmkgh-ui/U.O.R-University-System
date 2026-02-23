@@ -3262,44 +3262,52 @@ class AdminDashboard(ctk.CTkFrame):
                     self.finance_service.create_finance_profile(student_id, None, student.get("academic_year_id"))
                     finance = self.finance_service.get_student_finance(student_id)
 
-                if finance:
-                    final_fee = finance.get("final_fee")
-                    if final_fee is None and finance.get("academic_year_id"):
-                        year = self.academic_year_service.get_year_by_id(finance.get("academic_year_id"))
-                        if year:
-                            final_fee = year.get("final_fee")
-                    final_fee = Decimal(str(final_fee or 0))
-                    current_paid = Decimal(str(finance.get("amount_paid") or 0))
-                    
-                    # Vérifier si des frais académiques sont définis
-                    if final_fee <= 0:
-                        ErrorManager.show_error(
-                            "payment_no_active_fees",
-                            f"Student {student_id} promotion has no active academic fees",
-                            dialog
-                        )
-                        return
-                    
-                    # Vérifier si l'étudiant a déjà tout payé
-                    if current_paid >= final_fee:
-                        ErrorManager.show_error(
-                            "payment_already_paid",
-                            f"Student {student_id} has already paid ${current_paid:.2f} (total: ${final_fee:.2f})",
-                            dialog
-                        )
-                        return
-                    
-                    # Vérifier si le montant dépasse la limite
-                    if (current_paid + amount_usd) > final_fee:
-                        remaining = final_fee - current_paid
-                        if remaining < 0:
-                            remaining = Decimal("0")
-                        ErrorManager.show_error(
-                            "payment_exceeds_limit",
-                            f"Payment amount ${amount_usd} exceeds remaining balance ${remaining:.2f}",
-                            dialog
-                        )
-                        return
+                # Vérifier que le profil finance existe
+                if not finance:
+                    ErrorManager.show_error(
+                        "payment_processing",
+                        "Impossible de créer le profil financier de l'étudiant",
+                        dialog
+                    )
+                    return
+
+                final_fee = finance.get("final_fee")
+                if final_fee is None and finance.get("academic_year_id"):
+                    year = self.academic_year_service.get_year_by_id(finance.get("academic_year_id"))
+                    if year:
+                        final_fee = year.get("final_fee")
+                final_fee = Decimal(str(final_fee or 0))
+                current_paid = Decimal(str(finance.get("amount_paid") or 0))
+                
+                # Vérifier si des frais académiques sont définis
+                if final_fee <= 0:
+                    ErrorManager.show_error(
+                        "payment_no_active_fees",
+                        f"Student {student_id} promotion has no active academic fees",
+                        dialog
+                    )
+                    return
+                
+                # Vérifier si l'étudiant a déjà tout payé
+                if current_paid >= final_fee:
+                    ErrorManager.show_error(
+                        "payment_already_paid",
+                        f"Student {student_id} has already paid ${current_paid:.2f} (total: ${final_fee:.2f})",
+                        dialog
+                    )
+                    return
+                
+                # Vérifier si le montant dépasse la limite
+                if (current_paid + amount_usd) > final_fee:
+                    remaining = final_fee - current_paid
+                    if remaining < 0:
+                        remaining = Decimal("0")
+                    ErrorManager.show_error(
+                        "payment_exceeds_limit",
+                        f"Payment amount ${amount_usd} exceeds remaining balance ${remaining:.2f}",
+                        dialog
+                    )
+                    return
 
                 save_btn.configure(state="disabled")
                 amount_entry.configure(state="disabled")

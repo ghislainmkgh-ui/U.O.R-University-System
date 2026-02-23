@@ -33,6 +33,11 @@ class NotificationService:
         self.ultramsg_instance = ULTRAMSG_INSTANCE_ID
         self.ultramsg_token = ULTRAMSG_TOKEN
         self.email_logo_path = EMAIL_LOGO_PATH
+        
+        # Log configuration status
+        logger.info(f"NotificationService initialized - Email: {bool(self.email_address)}, Ultramsg: {bool(self.ultramsg_instance)}")
+        if not self.ultramsg_instance or not self.ultramsg_token:
+            logger.warning(f"Ultramsg not fully configured - Instance: {bool(self.ultramsg_instance)}, Token: {bool(self.ultramsg_token)}")
 
     def get_channel_status(self) -> dict:
         """Retourne l'état de configuration des notifications"""
@@ -55,6 +60,7 @@ class NotificationService:
             promotion_info: Chaîne formatée "Faculté / Département / Promotion" pour affichage
         """
         try:
+            logger.info(f"Sending payment notification to {student_email} / {student_phone}")
             amount_paid_usd = float(amount_paid)
             remaining_usd = float(max(remaining_amount, 0))
             final_fee_usd = float(final_fee)
@@ -127,8 +133,14 @@ Votre paiement a été reçu avec succès.
                 promotion_info=promotion_info,
             )
             email_ok = self._send_email(student_email, subject, body, html_body=html_body, logo_path=self.email_logo_path)
+            logger.info(f"Email notification result: {email_ok}")
+            
             whatsapp_ok = self._send_whatsapp(student_phone, whatsapp_msg)
-            return email_ok or whatsapp_ok
+            logger.info(f"WhatsApp notification result: {whatsapp_ok}")
+            
+            result = email_ok or whatsapp_ok
+            logger.info(f"Payment notification overall result: {result} (email: {email_ok}, whatsapp: {whatsapp_ok})")
+            return result
             
         except Exception as e:
             logger.error(f"Error preparing payment notification: {e}")
@@ -391,11 +403,12 @@ U.O.R - Système de Contrôle d'Accès
                 return False
                 
             if not self.ultramsg_instance or not self.ultramsg_token:
-                logger.warning("Ultramsg WhatsApp service not configured")
+                logger.error(f"Ultramsg WhatsApp service not configured - Instance: {bool(self.ultramsg_instance)}, Token: {bool(self.ultramsg_token)}")
                 return False
 
             # Normaliser le numéro de téléphone
-            to_number = str(student_phone).strip()
+            original_phone = str(student_phone).strip()
+            to_number = original_phone
             if to_number.lower().startswith("whatsapp:"):
                 to_number = to_number.split("whatsapp:", 1)[1]
             to_number = to_number.replace(" ", "").replace("-", "")
@@ -403,6 +416,8 @@ U.O.R - Système de Contrôle d'Accès
             # S'assurer que le numéro commence par +
             if not to_number.startswith("+"):
                 to_number = "+" + to_number
+            
+            logger.info(f"Sending WhatsApp - Original: {original_phone}, Normalized: {to_number}, Instance: {self.ultramsg_instance}")
             
             # API Ultramsg
             url = f"https://api.ultramsg.com/{self.ultramsg_instance}/messages/chat"
@@ -412,22 +427,25 @@ U.O.R - Système de Contrôle d'Accès
                 "body": message
             }
             
+            logger.debug(f"Ultramsg API URL: {url}, Payload keys: {list(payload.keys())}")
+            
             response = requests.post(url, data=payload, timeout=10)
             response.raise_for_status()
             
             result = response.json()
+            logger.info(f"Ultramsg API response: {result}")
             if result.get("sent") == "true" or result.get("sent") == True:
-                logger.info(f"WhatsApp sent successfully to {student_phone} via Ultramsg")
+                logger.info(f"WhatsApp sent successfully to {to_number}")
                 return True
             else:
-                logger.warning(f"Ultramsg response: {result}")
+                logger.error(f"Ultramsg sent=false - Response: {result}")
                 return False
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error sending WhatsApp via Ultramsg: {e}")
+            logger.error(f"WhatsApp API network error via Ultramsg: {type(e).__name__}: {e}")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error sending WhatsApp: {e}")
+            logger.error(f"Unexpected error sending WhatsApp via Ultramsg: {type(e).__name__}: {e}", exc_info=True)
             return False
 
     def _build_payment_email_html(self, student_name: str, amount_paid: float, final_fee: float,

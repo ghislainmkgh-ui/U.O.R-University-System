@@ -227,6 +227,11 @@ class FinanceService:
             department_name = promo.get('department_name', 'N/A')
             faculty_name = promo.get('faculty_name', 'N/A')
 
+            # ⚠️ VÉRIFICATION STRICTE: Pas de paiement si aucun frais n'est défini
+            if final_fee <= 0:
+                logger.warning(f"Payment rejected for student {student_id}: No active academic fees (final_fee={final_fee})")
+                return False
+
             if final_fee > 0 and new_amount > final_fee:
                 logger.warning(f"Overpayment blocked for student {student_id}: {new_amount} > {final_fee}")
                 return False
@@ -276,7 +281,8 @@ class FinanceService:
 
             def _notify_async():
                 try:
-                    self.notification_service.send_payment_notification(
+                    logger.info(f"Starting async notification for student {student_id}")
+                    success = self.notification_service.send_payment_notification(
                         student_email=promo.get('email'),
                         student_phone=promo.get('phone_number'),
                         student_name=f"{promo.get('firstname')} {promo.get('lastname')}",
@@ -287,12 +293,16 @@ class FinanceService:
                         threshold_reached=bool(is_eligible),
                         promotion_info=f"{faculty_name} / {department_name} / {promotion_name}"
                     )
+                    if not success:
+                        logger.error(f"Notification failed for student {student_id} - Email: {promo.get('email')}, Phone: {promo.get('phone_number')}")
+                    else:
+                        logger.info(f"Notification sent successfully for student {student_id}")
 
                     if is_eligible:
                         is_full_paid = new_amount >= final_fee
                         self._issue_access_code_if_needed(student_id, is_full_paid)
                 except Exception as notify_err:
-                    logger.warning(f"Notification async error: {notify_err}")
+                    logger.error(f"Notification async error for student {student_id}: {notify_err}", exc_info=True)
 
             threading.Thread(target=_notify_async, daemon=True).start()
 

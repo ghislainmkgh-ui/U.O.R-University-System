@@ -2968,46 +2968,124 @@ class AdminDashboard(ctk.CTkFrame):
         save_btn.pack(fill="x")
 
     def _open_payment_dialog(self, student: dict):
-        """Ouvre une fenêtre pour enregistrer un paiement étudiant"""
+        """Ouvre une fenêtre pour enregistrer un paiement étudiant - Style moderne"""
         dialog = ctk.CTkToplevel(self)
         dialog.title("Enregistrer un paiement")
-        dialog_width = min(460, max(360, int(self.screen_width * 0.35)))
-        dialog_height = min(320, max(240, int(self.screen_height * 0.35)))
-        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        
+        # Dimension responsive et centré
+        dialog_width = min(520, max(400, int(self.screen_width * 0.4)))
+        dialog_height = min(480, max(360, int(self.screen_height * 0.5)))
+        
+        # Centrer sur le dashboard
+        dashboard_x = self.winfo_rootx()
+        dashboard_y = self.winfo_rooty()
+        dashboard_width = self.winfo_width()
+        dashboard_height = self.winfo_height()
+        
+        center_x = dashboard_x + (dashboard_width - dialog_width) // 2
+        center_y = dashboard_y + (dashboard_height - dialog_height) // 2
+        
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{center_x}+{center_y}")
         dialog.grab_set()
+        dialog.resizable(False, False)
         self._animate_window_open(dialog)
 
         fullname = f"{student.get('firstname', '')} {student.get('lastname', '')}".strip()
         student_number = student.get("student_number", "-")
         student_id = student.get("id")
 
-        ctk.CTkLabel(
-            dialog,
-            text="💳 Enregistrer un paiement",
-            font=self._font(18, "bold"),
-            text_color=self.colors["text_dark"]
-        ).pack(pady=(20, 10))
-
-        ctk.CTkLabel(
-            dialog,
-            text=f"{fullname} ({student_number})",
-            font=self._font(12),
-            text_color=self.colors["text_light"]
-        ).pack(pady=(0, 10))
-
-        form = ctk.CTkFrame(dialog, fg_color="transparent")
-        form.pack(fill="x", padx=20, pady=10)
-
-        ctk.CTkLabel(form, text="Montant payé ($)", font=self._font(12)).pack(anchor="w")
-        amount_entry = ctk.CTkEntry(form, placeholder_text="Ex: 50")
-        amount_entry.pack(fill="x", pady=(6, 10))
-
-        # Conteneur pour l'indicateur de chargement (caché initialement)
-        loading_container = ctk.CTkFrame(form, fg_color="transparent")
-        loading_container.pack(anchor="w", pady=(0, 6))
+        # === HEADER COLORÉ ===
+        header = ctk.CTkFrame(dialog, fg_color="#0a84ff", corner_radius=0)
+        header.pack(fill="x", side="top")
         
-        loading_indicator = LoadingIndicator(loading_container, text="Traitement du paiement...")
-        loading_indicator.pack(fill="x")
+        title_label = ctk.CTkLabel(
+            header,
+            text="💳 Enregistrer un Paiement",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#ffffff"
+        )
+        title_label.pack(pady=(15, 8), padx=20)
+        
+        student_info_label = ctk.CTkLabel(
+            header,
+            text=f"{fullname} • #{student_number}",
+            font=ctk.CTkFont(size=12),
+            text_color="#e8f4ff"
+        )
+        student_info_label.pack(pady=(0, 15), padx=20)
+
+        # === CONTENU PRINCIPAL ===
+        content = ctk.CTkFrame(dialog, fg_color=self.colors.get("main_bg", "#f8f9fa"))
+        content.pack(fill="both", expand=True, padx=0, pady=0)
+
+        # Label Montant avec icône
+        amount_label_box = ctk.CTkFrame(content, fg_color="transparent")
+        amount_label_box.pack(fill="x", padx=25, pady=(20, 8))
+        
+        ctk.CTkLabel(
+            amount_label_box,
+            text="💰 Montant à payer",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#1e293b"
+        ).pack(anchor="w")
+
+        # Input Montant avec style amélioré
+        amount_entry = ctk.CTkEntry(
+            content,
+            placeholder_text="Entrez le montant (ex: 50.00)",
+            font=ctk.CTkFont(size=12),
+            fg_color="#ffffff",
+            text_color="#1e293b",
+            placeholder_text_color="#cbd5e1",
+            border_color="#cbd5e1",
+            border_width=1,
+            height=40,
+            corner_radius=8
+        )
+        amount_entry.pack(fill="x", padx=25, pady=(0, 15))
+
+        # Conteneur pour la barre de progression (caché initialement)
+        loading_container = ctk.CTkFrame(content, fg_color="transparent")
+        loading_container.pack(fill="x", padx=25, pady=(10, 0))
+        
+        # === BARRE DE PROGRESSION PERSONNALISÉE ===
+        progress_frame = ctk.CTkFrame(loading_container, fg_color="transparent")
+        progress_frame.pack(fill="x", pady=(0, 0))
+        
+        progress_label = ctk.CTkLabel(
+            progress_frame,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#0a84ff"
+        )
+        progress_label.pack(anchor="w", pady=(0, 6))
+        
+        # Barre de progression avec fond gris
+        progress_bg = ctk.CTkFrame(progress_frame, fg_color="#e2e8f0", height=6, corner_radius=3)
+        progress_bg.pack(fill="x")
+        progress_bg.pack_propagate(False)
+        
+        progress_bar = ctk.CTkFrame(progress_bg, fg_color="#0a84ff", height=6, corner_radius=3)
+        progress_bar.pack(side="left", fill="y")
+        progress_bar.pack_propagate(False)
+        
+        # Pourcentage
+        progress_pct_label = ctk.CTkLabel(
+            progress_frame,
+            text="0%",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color="#0a84ff"
+        )
+        progress_pct_label.pack(anchor="e", pady=(4, 0))
+        
+        def update_progress(percent: int, status_text: str = ""):
+            """Met à jour la barre de progression"""
+            progress_width = int((percent / 100) * (progress_bg.winfo_width() - 4))
+            if progress_width > 0:
+                progress_bar.configure(width=progress_width)
+            progress_pct_label.configure(text=f"{percent}%")
+            if status_text:
+                progress_label.configure(text=status_text)
 
         def save_payment():
             amount_text = amount_entry.get().strip().replace(",", ".")
@@ -3045,25 +3123,34 @@ class AdminDashboard(ctk.CTkFrame):
 
                 save_btn.configure(state="disabled")
                 amount_entry.configure(state="disabled")
-                loading_indicator.start("Traitement du paiement...")
+                progress_frame.pack(fill="x", padx=0, pady=(10, 15))
 
                 def worker():
                     success = False
                     error_msg = None
                     try:
+                        # Simuler la progression
+                        for i in [10, 30, 60, 80]:
+                            self.after(200, lambda p=i: update_progress(p, f"Traitement... {p}%"))
+                            import time
+                            time.sleep(0.3)
+                        
                         success = self.finance_service.record_payment(student_id, amount_usd)
                     except Exception as ex:
                         error_msg = str(ex)
 
                     def finish():
-                        loading_indicator.stop()
-                        save_btn.configure(state="normal")
-                        amount_entry.configure(state="normal")
                         if success:
-                            messagebox.showinfo("Succès", "Paiement enregistré avec succès.")
-                            dialog.destroy()
-                            self._render_current_view()
+                            update_progress(100, "Paiement enregistré ✓")
+                            self.after(1500, lambda: [
+                                messagebox.showinfo("Succès", "Paiement enregistré avec succès."),
+                                dialog.destroy(),
+                                self._render_current_view()
+                            ])
                         else:
+                            progress_frame.pack_forget()
+                            save_btn.configure(state="normal")
+                            amount_entry.configure(state="normal")
                             if error_msg:
                                 messagebox.showerror("Erreur", f"Échec de l'enregistrement du paiement: {error_msg}")
                             else:
@@ -3075,15 +3162,35 @@ class AdminDashboard(ctk.CTkFrame):
             except Exception:
                 messagebox.showerror("Erreur", "Montant invalide.")
 
+        # === BOUTONS ===
+        button_frame = ctk.CTkFrame(content, fg_color="transparent")
+        button_frame.pack(fill="x", padx=25, pady=(20, 20))
+        
         save_btn = ctk.CTkButton(
-            dialog,
-            text="Enregistrer",
-            fg_color=self.colors["success"],
-            hover_color=self.colors["primary"],
-            height=self._scaled(36),
+            button_frame,
+            text="✓ Enregistrer le Paiement",
+            fg_color="#0a84ff",
+            hover_color="#0078d4",
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            height=42,
+            corner_radius=8,
             command=save_payment
         )
-        save_btn.pack(fill="x", padx=20, pady=(5, 15))
+        save_btn.pack(fill="x", pady=(0, 10))
+        
+        cancel_btn = ctk.CTkButton(
+            button_frame,
+            text="Annuler",
+            fg_color="#e2e8f0",
+            hover_color="#cbd5e1",
+            text_color="#1e293b",
+            font=ctk.CTkFont(size=12),
+            height=36,
+            corner_radius=8,
+            command=dialog.destroy
+        )
+        cancel_btn.pack(fill="x")
 
     def _open_payment_history_dialog(self, student: dict):
         """Ouvre la fenêtre d'historique de paiements par étudiant"""

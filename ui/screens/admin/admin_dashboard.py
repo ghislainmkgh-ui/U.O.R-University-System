@@ -614,7 +614,8 @@ class AdminDashboard(ctk.CTkFrame):
                 except Exception:
                     pass
 
-            self._bind_sidebar_hover_expand()
+            # DISABLED: Hover binding causes constant flickering/flashing
+            # self._bind_sidebar_hover_expand()
         else:
             self.sidebar.configure(width=self.sidebar_width_full)
             self.logo_title_label.configure(text="U.O.R", font=ctk.CTkFont(size=32, weight="bold"))

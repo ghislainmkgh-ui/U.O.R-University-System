@@ -10,6 +10,7 @@ import re
 from datetime import datetime
 from decimal import Decimal
 from tkinter import filedialog, messagebox, StringVar
+import tkinter as tk
 from PIL import Image
 from ui.i18n.translator import Translator
 from ui.theme.theme_manager import ThemeManager
@@ -27,42 +28,54 @@ from core.models.student import Student
 logger = logging.getLogger(__name__)
 
 
-class Tooltip(ctk.CTkToplevel):
-    """Simple tooltip hover display for buttons"""
+class Tooltip:
+    """Simple tooltip that appears as a label next to the widget"""
     def __init__(self, widget, text: str):
-        super().__init__(widget)
         self.widget = widget
         self.text = text
-        self.overrideredirect(True)  # Remove window decorations
+        self.tooltip_window = None
+        self.tooltip_label = None
         
-        # Configuration
-        self.attributes("-topmost", True)
-        self.configure(fg_color="transparent")
+    def show_tooltip(self, event=None):
+        """Show the tooltip"""
+        if self.tooltip_window is not None:
+            return
         
-        # Label with background
-        label = ctk.CTkLabel(
-            self,
-            text=text,
-            fg_color="#1e293b",
-            text_color="#f8fafc",
+        # Create a small toplevel window for tooltip
+        self.tooltip_window = tk.Toplevel(self.widget)
+        self.tooltip_window.wm_overrideredirect(True)
+        self.tooltip_window.wm_attributes("-topmost", True)
+        
+        # Create label inside
+        self.tooltip_label = tk.Label(
+            self.tooltip_window,
+            text=self.text,
+            background="#1e293b",
+            foreground="#f8fafc",
             padx=10,
             pady=6,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            corner_radius=6
+            font=("Arial", 10, "bold"),
+            relief=tk.FLAT
         )
-        label.pack()
+        self.tooltip_label.pack()
         
-        # Position next to the widget (to the right)
-        self.update_idletasks()
-        x = widget.winfo_rootx() + widget.winfo_width() + 10
-        y = widget.winfo_rooty() + (widget.winfo_height() // 2) - (self.winfo_height() // 2)
-        self.geometry(f"+{x}+{y}")
+        # Position it next to the widget
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() + 10
+        y = self.widget.winfo_rooty() + (self.widget.winfo_height() // 2) - 15
+        self.tooltip_window.wm_geometry(f"+{x}+{y}")
         
-        # Show it
-        self.deiconify()
-        
-        # Schedule destruction
-        self.after(2000, self.destroy)
+        # Schedule removal
+        self.tooltip_window.after(2000, self.hide_tooltip)
+    
+    def hide_tooltip(self):
+        """Hide the tooltip"""
+        if self.tooltip_window is not None:
+            try:
+                self.tooltip_window.destroy()
+            except:
+                pass
+            self.tooltip_window = None
+            self.tooltip_label = None
 
 
 class AdminDashboard(ctk.CTkFrame):
@@ -363,13 +376,20 @@ class AdminDashboard(ctk.CTkFrame):
             btn.pack(fill="x", padx=15, pady=3)
             
             # Add tooltip on hover (show label when icon-only in compact mode)
-            def create_tooltip(button, tooltip_text):
+            def create_tooltip_binding(button, tooltip_text):
+                tooltip_obj = Tooltip(button, tooltip_text)
+                
                 def on_enter(_event):
                     if self.sidebar_mode == "compact":
-                        Tooltip(button, tooltip_text)
+                        tooltip_obj.show_tooltip(_event)
+                
+                def on_leave(_event):
+                    tooltip_obj.hide_tooltip()
+                
                 button.bind("<Enter>", on_enter)
+                button.bind("<Leave>", on_leave)
             
-            create_tooltip(btn, label)
+            create_tooltip_binding(btn, label)
             
             self.nav_buttons.append({"button": btn, "key": key, "icon": icon, "label": label})
         
@@ -403,10 +423,14 @@ class AdminDashboard(ctk.CTkFrame):
         self.logout_btn.pack(fill="x", padx=15, pady=(12, 22))
         
         # Add tooltip for logout button
+        logout_tooltip = Tooltip(self.logout_btn, "Déconnexion")
         def show_logout_tooltip(_event):
             if self.sidebar_mode == "compact":
-                Tooltip(self.logout_btn, "Déconnexion")
+                logout_tooltip.show_tooltip(_event)
+        def hide_logout_tooltip(_event):
+            logout_tooltip.hide_tooltip()
         self.logout_btn.bind("<Enter>", show_logout_tooltip)
+        self.logout_btn.bind("<Leave>", hide_logout_tooltip)
         
         # === MAIN CONTENT ===
         self.main_content = ctk.CTkFrame(container, fg_color=self.colors["main_bg"])

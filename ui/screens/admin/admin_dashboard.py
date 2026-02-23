@@ -54,7 +54,7 @@ class ErrorManager:
             "Payment attempt for fully paid student: {details}"
         ),
         "payment_no_active_fees": (
-            "Aucun frais académique n'est défini pour cette promotion. Le paiement ne peut pas être enregistré.",
+            "Votre paiement a échoué en raison :\n\nLes frais académiques pour cette promotion ne sont pas définis ou connus.",
             "Payment rejected: No active academic fees for student: {details}"
         ),
         "payment_processing": (

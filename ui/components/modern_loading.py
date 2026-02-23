@@ -1,96 +1,90 @@
-"""Overlay de chargement moderne avec progression en pourcentage"""
+"""Overlay de chargement moderne intégré dans la page"""
 import customtkinter as ctk
-import math
 import threading
 from typing import Callable, Optional
 
 
-class ModernLoadingOverlay(ctk.CTkToplevel):
-    """Fenêtre de chargement moderne avec cercle de progression"""
+class LoadingOverlay(ctk.CTkFrame):
+    """Overlay de chargement moderne sur la même page (pas popup séparée)"""
     
-    def __init__(self, parent, title: str = "Chargement", on_cancel: Optional[Callable] = None):
-        super().__init__(parent)
-        self.title(title)
-        self.geometry("400x500")
-        self.resizable(False, False)
-        
-        # Centrer la fenêtre
-        self.transient(parent)
-        self.grab_set()
-        
-        # Positionnement central
-        x = parent.winfo_x() + parent.winfo_width() // 2 - 200
-        y = parent.winfo_y() + parent.winfo_height() // 2 - 250
-        self.geometry(f"+{x}+{y}")
-        
-        # Couleurs
-        self.bg_color = "#f8fafc"
-        self.primary_color = "#3b82f6"
-        self.configure(fg_color=self.bg_color)
+    def __init__(self, parent, on_cancel: Optional[Callable] = None):
+        super().__init__(parent, fg_color="#000000")  # Semi-dark background
+        self.on_cancel = on_cancel
         
         # État
         self.progress = 0
         self.status_text = "Initialisation..."
         self.is_complete = False
-        self.on_cancel = on_cancel
+        self.spinner_index = 0
+        self.spinner_chars = ["◐", "◓", "◑", "◒"]
         
-        self._create_ui()
-        self.after(100, self._update_animation)
-    
-    def _create_ui(self):
-        """Crée l'interface"""
-        main = ctk.CTkFrame(self, fg_color=self.bg_color)
-        main.pack(fill="both", expand=True, padx=40, pady=40)
+        # Créer le contenu au centre
+        center_frame = ctk.CTkFrame(self, fg_color="#f8fafc", corner_radius=16, width=380, height=420)
+        center_frame.pack_propagate(False)
+        center_frame.place(relx=0.5, rely=0.5, anchor="center")
         
         # Titre
         title_label = ctk.CTkLabel(
-            main,
+            center_frame,
             text="U.O.R Chargement",
-            font=ctk.CTkFont(size=18, weight="bold"),
+            font=ctk.CTkFont(size=16, weight="bold"),
             text_color="#1e293b"
         )
-        title_label.pack(pady=(0, 30))
+        title_label.pack(pady=(20, 25))
         
-        # Canvas pour cercle de progression
-        self.canvas = ctk.CTkCanvas(
-            main,
-            width=200,
-            height=200,
-            bg=self.bg_color,
-            highlightthickness=0
+        # Spinner animé
+        self.spinner_label = ctk.CTkLabel(
+            center_frame,
+            text="◐",
+            font=ctk.CTkFont(size=60),
+            text_color="#3b82f6"
         )
-        self.canvas.pack(pady=(0, 30))
+        self.spinner_label.pack(pady=(0, 20))
         
-        # Label pourcentage
+        # Pourcentage
         self.percent_label = ctk.CTkLabel(
-            main,
+            center_frame,
             text="0%",
             font=ctk.CTkFont(size=36, weight="bold"),
-            text_color=self.primary_color
+            text_color="#3b82f6"
         )
         self.percent_label.pack()
         
+        # Barre de progression
+        progress_bg = ctk.CTkFrame(center_frame, fg_color="#e2e8f0", corner_radius=3, height=5)
+        progress_bg.pack(fill="x", padx=20, pady=(20, 0))
+        progress_bg.pack_propagate(False)
+        
+        self.progress_bar = ctk.CTkFrame(progress_bg, fg_color="#3b82f6", corner_radius=3, height=5)
+        self.progress_bar.pack(side="left", fill="y")
+        self.progress_bar.configure(width=0)
+        
         # Status text
         self.status_label = ctk.CTkLabel(
-            main,
+            center_frame,
             text=self.status_text,
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=11),
             text_color="#64748b"
         )
-        self.status_label.pack(pady=(15, 0))
+        self.status_label.pack(pady=(12, 0))
         
         # Bouton annuler
         if self.on_cancel:
             cancel_btn = ctk.CTkButton(
-                main,
+                center_frame,
                 text="Annuler",
                 command=self._on_cancel,
                 fg_color="#ef4444",
                 hover_color="#dc2626",
-                font=ctk.CTkFont(size=11),
-                height=32
+                font=ctk.CTkFont(size=10),
+                height=28
             )
-            cancel_btn.pack(fill="x", pady=(30, 0))
+            cancel_btn.pack(fill="x", padx=20, pady=(20, 20))
+        else:
+            # Just padding at the bottom
+            ctk.CTkFrame(center_frame, fg_color="transparent", height=20).pack()
+        
+        self.after(100, self._update_animation)
     
     def set_progress(self, value: int, status: str = None):
         """Mettre à jour la progression (0-100)"""
@@ -98,79 +92,57 @@ class ModernLoadingOverlay(ctk.CTkToplevel):
         if status:
             self.status_text = status
     
-    def _draw_circle(self):
-        """Dessine le cercle de progression"""
-        self.canvas.delete("all")
-        
-        w, h = 200, 200
-        x, y = 100, 100
-        radius = 80
-        
-        # Cercle de fond gris
-        self.canvas.create_oval(
-            x - radius, y - radius,
-            x + radius, y + radius,
-            outline="#e2e8f0",
-            width=8
-        )
-        
-        # Cercle de progression bleu
-        if self.progress > 0:
-            # Convertir pourcentage en angle (0-360)
-            angle = (self.progress / 100) * 360
-            
-            # Dessiner l'arc de progression
-            self.canvas.create_arc(
-                x - radius, y - radius,
-                x + radius, y + radius,
-                start=90,  # Commencer en haut
-                extent=-angle,  # Aller dans le sens horaire
-                outline=self.primary_color,
-                width=8,
-                style="arc"
-            )
-    
     def _update_animation(self):
-        """Anime la progression"""
-        self._draw_circle()
+        """Anime le spinner et barre"""
+        # Spinner rotatif
+        self.spinner_label.configure(text=self.spinner_chars[self.spinner_index])
+        self.spinner_index = (self.spinner_index + 1) % len(self.spinner_chars)
+        
+        # Pourcentage
         self.percent_label.configure(text=f"{self.progress}%")
+        
+        # Barre de progression (340 = 380 - 40 padding)
+        progress_width = int(340 * (self.progress / 100))
+        self.progress_bar.configure(width=progress_width)
+        
+        # Statut
         self.status_label.configure(text=self.status_text)
         
         if not self.is_complete:
-            self.after(100, self._update_animation)
+            self.after(150, self._update_animation)
     
     def _on_cancel(self):
         """Gère l'annulation"""
         if self.on_cancel:
             self.on_cancel()
-        self.destroy()
+        self.place_forget()
     
     def complete(self):
-        """Marquer comme complet et fermer"""
+        """Marquer comme complet"""
         self.is_complete = True
         self.progress = 100
         self.status_text = "Complet ✓"
         
-        # Afficher 100% pendant 1 seconde puis fermer
-        self.after(500, self.destroy)
+        # Attendre 1 seconde puis disparaître
+        self.after(1000, lambda: self.place_forget())
     
-    def close_immediately(self):
-        """Fermer sans animation"""
-        self.is_complete = True
-        self.destroy()
+    def show(self):
+        """Afficher l'overlay"""
+        self.place(relx=0, rely=0, relwidth=1, relheight=1)
 
 
 class ProgressTracker:
     """Tracker pour coordonner la progression multi-étapes"""
     
     def __init__(self):
-        self.overlay: Optional[ModernLoadingOverlay] = None
+        self.overlay: Optional[LoadingOverlay] = None
         self.stages = {}
         self.current_stage = 0
     
-    def create_overlay(self, parent, title: str = "Chargement") -> ModernLoadingOverlay:
-        """Créer l'overlay"""
-        self.overlay = ModernLoadingOverlay(parent, title=title)
+    def create_overlay(self, parent) -> LoadingOverlay:
+        """Créer l'overlay sur la page parent"""
+        self.overlay = LoadingOverlay(parent)
+        self.overlay.show()
         return self.overlay
     
     def add_stage(self, name: str, weight: int = 1):

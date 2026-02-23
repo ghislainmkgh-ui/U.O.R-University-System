@@ -277,7 +277,7 @@ class LoginScreen(ctk.CTkFrame):
         logger.info(f"Language changed to: {value}")
 
     def _on_login(self):
-        """Gère la connexion avec loading moderne"""
+        """Gère la connexion avec loading moderne intégré"""
         username = self.entry_username.get().strip()
         password = self.entry_password.get().strip()
 
@@ -304,9 +304,9 @@ class LoginScreen(ctk.CTkFrame):
             if user:
                 logger.info(f"User {user.get('email')} logged in successfully")
                 
-                # Afficher le loading overlay
-                parent = self.parent_app if self.parent_app else self.winfo_toplevel()
-                progress = self.progress_tracker.create_overlay(parent, title="Connexion en cours")
+                # Créer l'overlay de loading sur la même page
+                parent_frame = self.winfo_toplevel()
+                progress = self.progress_tracker.create_overlay(parent_frame)
                 progress.set_progress(10, "Authentification validée...")
                 
                 # Charger le dashboard en arrière-plan
@@ -315,7 +315,7 @@ class LoginScreen(ctk.CTkFrame):
                         progress.set_progress(30, "Initialisation interface...")
                         
                         dashboard = AdminDashboard(
-                            parent=parent,
+                            parent=parent_frame,
                             language=self.selected_language,
                             theme=self.theme
                         )
@@ -323,7 +323,7 @@ class LoginScreen(ctk.CTkFrame):
                         progress.set_progress(70, "Chargement données...")
                         
                         # Attendre que le dashboard soit rendu
-                        parent.update_idletasks()
+                        parent_frame.update_idletasks()
                         
                         progress.set_progress(90, "Finalisation...")
                         
@@ -340,7 +340,7 @@ class LoginScreen(ctk.CTkFrame):
                         self.dashboard_open = False
                     except Exception as e:
                         logger.error(f"Dashboard init error: {e}")
-                        progress.close_immediately()
+                        progress.place_forget()
                         self.dashboard_open = False
                         if login_btn:
                             login_btn.configure(state="normal")

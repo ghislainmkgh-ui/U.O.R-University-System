@@ -241,7 +241,7 @@ class AdminDashboard(ctk.CTkFrame):
         self._photo_cache = {}
         self._esp32_status_label = None
         self._responsive_labels = []
-        self.sidebar_mode = "full"
+        self.sidebar_mode = "compact"
         self._loading_overlay = None
         self._loading_indicator = None
         self._loading_visible = False
@@ -654,7 +654,8 @@ class AdminDashboard(ctk.CTkFrame):
         
         # Afficher la vue active
         self._render_current_view()
-        self._update_sidebar_layout()
+        # Forcer le mode compact (icônes seulement) pour gagner de l'espace
+        self._apply_sidebar_mode("compact")
     
     def _create_card(self, parent, width=None, height=None):
         """Crée une carte avec ombre moderne"""
@@ -791,13 +792,8 @@ class AdminDashboard(ctk.CTkFrame):
         """Effectue réellement la mise à jour du sidebar"""
         self._sidebar_update_debounce_job = None
         
-        try:
-            window_width = self.parent_window.winfo_width() if self.parent_window else self.winfo_width()
-        except Exception:
-            window_width = self.winfo_width()
-
-        force_compact = self.ui_mode in ("tiny", "small", "tablet")
-        target_mode = "compact" if force_compact or window_width < self.sidebar_collapse_breakpoint else "full"
+        # Toujours forcer le mode compact pour gagner de l'espace
+        target_mode = "compact"
         if target_mode == self.sidebar_mode:
             return
 

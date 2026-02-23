@@ -27,6 +27,44 @@ from core.models.student import Student
 logger = logging.getLogger(__name__)
 
 
+class Tooltip(ctk.CTkToplevel):
+    """Simple tooltip hover display for buttons"""
+    def __init__(self, widget, text: str):
+        super().__init__(widget)
+        self.widget = widget
+        self.text = text
+        self.withdraw()
+        
+        # Configuration
+        self.attributes("-topmost", True)
+        try:
+            self.attributes("-type", "tooltip")
+        except:
+            pass
+        
+        # Label
+        label = ctk.CTkLabel(
+            self,
+            text=text,
+            fg_color="#1e293b",
+            text_color="#f8fafc",
+            padx=8,
+            pady=4,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            corner_radius=4
+        )
+        label.pack()
+        
+        # Position below the widget
+        self.update_idletasks()
+        x = widget.winfo_rootx() + widget.winfo_width() + 5
+        y = widget.winfo_rooty() + (widget.winfo_height() // 2) - (label.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+        
+        # Schedule destruction
+        self.after(2500, self.destroy)
+
+
 class AdminDashboard(ctk.CTkFrame):
     """Tableau de bord administrateur moderne avec design professionnel"""
     
@@ -323,6 +361,16 @@ class AdminDashboard(ctk.CTkFrame):
                 font=ctk.CTkFont(size=13, weight="bold")
             )
             btn.pack(fill="x", padx=15, pady=3)
+            
+            # Add tooltip on hover (show label when icon-only in compact mode)
+            def create_tooltip(button, tooltip_text):
+                def on_enter(_event):
+                    if self.sidebar_mode == "compact":
+                        Tooltip(button, tooltip_text)
+                button.bind("<Enter>", on_enter)
+            
+            create_tooltip(btn, label)
+            
             self.nav_buttons.append({"button": btn, "key": key, "icon": icon, "label": label})
         
         # Spacer
@@ -353,6 +401,12 @@ class AdminDashboard(ctk.CTkFrame):
             font=ctk.CTkFont(size=logout_font_size, weight="bold")
         )
         self.logout_btn.pack(fill="x", padx=15, pady=(12, 22))
+        
+        # Add tooltip for logout button
+        def show_logout_tooltip(_event):
+            if self.sidebar_mode == "compact":
+                Tooltip(self.logout_btn, "Déconnexion")
+        self.logout_btn.bind("<Enter>", show_logout_tooltip)
         
         # === MAIN CONTENT ===
         self.main_content = ctk.CTkFrame(container, fg_color=self.colors["main_bg"])

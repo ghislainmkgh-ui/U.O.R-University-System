@@ -1,11 +1,13 @@
 """Écran de connexion moderne et compact"""
 import customtkinter as ctk
 import logging
+import threading
 from tkinter import messagebox
 from ui.i18n.translator import Translator
 from ui.theme.theme_manager import ThemeManager
 from app.services.auth.authentication_service import AuthenticationService
 from ui.screens.admin.admin_dashboard import AdminDashboard
+from ui.components.modern_loading import ProgressTracker
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,7 @@ class LoginScreen(ctk.CTkFrame):
         self.theme = ThemeManager("light")
         self.auth_service = AuthenticationService()
         self.dashboard_open = False
+        self.progress_tracker = ProgressTracker()
 
         self.card_outer = None
         self.card_inner = None
@@ -274,13 +277,18 @@ class LoginScreen(ctk.CTkFrame):
         logger.info(f"Language changed to: {value}")
 
     def _on_login(self):
-        """Gère la connexion"""
+        """Gère la connexion avec loading moderne"""
         username = self.entry_username.get().strip()
         password = self.entry_password.get().strip()
 
         if not username or not password:
             self.status_label.configure(text="Please enter credentials")
             return
+
+        # Désactiver le bouton login
+        login_btn = getattr(self, 'login_btn', None)
+        if login_btn:
+            login_btn.configure(state="disabled")
 
         try:
             self.dashboard_open = True
@@ -289,22 +297,66 @@ class LoginScreen(ctk.CTkFrame):
             if error:
                 self.status_label.configure(text=error)
                 self.dashboard_open = False
+                if login_btn:
+                    login_btn.configure(state="normal")
                 return
 
             if user:
                 logger.info(f"User {user.get('email')} logged in successfully")
-                self.pack_forget()
-
-                parent = self.parent_app if self.parent_app else self.master
-                dashboard = AdminDashboard(parent=parent, language=self.selected_language, theme=self.theme)
-                if self.parent_app:
-                    self.parent_app.dashboard = dashboard
-
-                self.dashboard_open = False
+                
+                # Afficher le loading overlay
+                parent = self.parent_app if self.parent_app else self.winfo_toplevel()
+                progress = self.progress_tracker.create_overlay(parent, title="Connexion en cours")
+                progress.set_progress(10, "Authentification validée...")
+                
+                # Charger le dashboard en arrière-plan
+                def load_dashboard():
+                    try:
+                        progress.set_progress(30, "Initialisation interface...")
+                        
+                        dashboard = AdminDashboard(
+                            parent=parent,
+                            language=self.selected_language,
+                            theme=self.theme
+                        )
+                        
+                        progress.set_progress(70, "Chargement données...")
+                        
+                        # Attendre que le dashboard soit rendu
+                        parent.update_idletasks()
+                        
+                        progress.set_progress(90, "Finalisation...")
+                        
+                        # Passer le dashboard à l'app parent
+                        if self.parent_app:
+                            self.parent_app.dashboard = dashboard
+                        
+                        # Cacher le login
+                        self.pack_forget()
+                        
+                        # Terminer le loading
+                        progress.complete()
+                        
+                        self.dashboard_open = False
+                    except Exception as e:
+                        logger.error(f"Dashboard init error: {e}")
+                        progress.close_immediately()
+                        self.dashboard_open = False
+                        if login_btn:
+                            login_btn.configure(state="normal")
+                        self.status_label.configure(text=f"Erreur: {str(e)}")
+                
+                # Lancer en thread séparé pour ne pas bloquer l'UI
+                thread = threading.Thread(target=load_dashboard, daemon=True)
+                thread.start()
             else:
                 self.status_label.configure(text="Login failed")
                 self.dashboard_open = False
+                if login_btn:
+                    login_btn.configure(state="normal")
         except Exception as e:
             logger.error(f"Login error: {e}")
             self.status_label.configure(text=f"Error: {str(e)}")
             self.dashboard_open = False
+            if login_btn:
+                login_btn.configure(state="normal")

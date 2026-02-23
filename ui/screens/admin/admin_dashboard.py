@@ -82,6 +82,8 @@ class AdminDashboard(ctk.CTkFrame):
         self.sidebar_hover_expanded = False
         self._sidebar_anim_job = None
         self._sidebar_animating = False
+        self._sidebar_update_debounce_job = None
+        self._scrolling_active = False
         self.debug_students_table = False
         
         self.colors = self._get_color_palette()
@@ -564,7 +566,17 @@ class AdminDashboard(ctk.CTkFrame):
         return dialog, loading
 
     def _update_sidebar_layout(self):
-        """Met à jour l'affichage de la sidebar selon la taille de fenêtre"""
+        """Met à jour l'affichage de la sidebar selon la taille de fenêtre (avec debouncing)"""
+        # Debouncer les updates pendant le scrolling pour éviter le lag
+        if self._sidebar_update_debounce_job:
+            self.after_cancel(self._sidebar_update_debounce_job)
+        
+        self._sidebar_update_debounce_job = self.after(200, self._do_update_sidebar_layout)
+    
+    def _do_update_sidebar_layout(self):
+        """Effectue réellement la mise à jour du sidebar"""
+        self._sidebar_update_debounce_job = None
+        
         try:
             window_width = self.parent_window.winfo_width() if self.parent_window else self.winfo_width()
         except Exception:

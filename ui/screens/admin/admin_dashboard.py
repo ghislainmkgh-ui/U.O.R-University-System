@@ -687,6 +687,7 @@ class AdminDashboard(ctk.CTkFrame):
         self.sidebar_hover_expanded = False
 
     def _on_sidebar_enter(self, _event=None):
+        """Expand sidebar on hover (sans animation lourde pour éviter flicker)"""
         if self.sidebar_mode != "compact" or self.sidebar_hover_expanded:
             return
         self.sidebar_hover_expanded = True
@@ -701,26 +702,30 @@ class AdminDashboard(ctk.CTkFrame):
         if self.logout_btn:
             self.logout_btn.configure(text="🚪  Déconnexion", anchor="w")
 
-        self._animate_sidebar_width(self.sidebar_width_full)
+        # Expand sidebar directement sans animation (évite flicker)
+        self.sidebar.configure(width=self.sidebar_width_full)
 
     def _on_sidebar_leave(self, _event=None):
+        """Collapse sidebar on leave (sans animation)"""
         if self.sidebar_mode != "compact" or not self.sidebar_hover_expanded:
             return
         self.sidebar_hover_expanded = False
-        def finalize():
-            if self.logo_subtitle_label.winfo_ismapped():
-                self.logo_subtitle_label.pack_forget()
-            for item in self.nav_buttons:
-                btn = item["button"]
-                btn.configure(
-                    text=item["icon"],
-                    anchor="center",
-                    font=ctk.CTkFont(size=18, weight="bold")
-                )
-            if self.logout_btn:
-                self.logout_btn.configure(text="🚪", anchor="center")
+        
+        # Collapse directement
+        if self.logo_subtitle_label.winfo_ismapped():
+            self.logo_subtitle_label.pack_forget()
+        for item in self.nav_buttons:
+            btn = item["button"]
+            btn.configure(
+                text=item["icon"],
+                anchor="center",
+                font=ctk.CTkFont(size=18, weight="bold")
+            )
+        if self.logout_btn:
+            self.logout_btn.configure(text="🚪", anchor="center")
 
-        self._animate_sidebar_width(self.sidebar_width_compact, on_complete=finalize)
+        # Collapse sidebar directement sans animation
+        self.sidebar.configure(width=self.sidebar_width_compact)
 
     def _get_table_mode(self) -> str:
         """Retourne le mode de tableau en fonction de la largeur de fenêtre"""

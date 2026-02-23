@@ -28,6 +28,138 @@ from core.models.student import Student
 logger = logging.getLogger(__name__)
 
 
+class ErrorManager:
+    """Gère les messages d'erreur avec niveaux utilisateur et développeur"""
+    
+    # Mapping des erreurs: (type_erreur) -> (message_utilisateur, msg_log_template)
+    ERROR_MESSAGES = {
+        "database_connection": (
+            "Une erreur s'est produite lors de la connexion à la base de données.",
+            "Database connection error: {details}"
+        ),
+        "database_query": (
+            "Une erreur s'est produite lors de la lecture des données.",
+            "Database query error: {details}"
+        ),
+        "payment_invalid_amount": (
+            "Le montant saisi est invalide. Veuillez vérifier et réessayer.",
+            "Invalid payment amount: {details}"
+        ),
+        "payment_exceeds_limit": (
+            "Le montant dépasse la limite autorisée pour cet étudiant.",
+            "Payment exceeds limit: {details}"
+        ),
+        "payment_already_paid": (
+            "Cet étudiant a déjà complété tous ses paiements.",
+            "Payment attempt for fully paid student: {details}"
+        ),
+        "payment_processing": (
+            "Une erreur s'est produite lors du traitement du paiement.",
+            "Payment processing error: {details}"
+        ),
+        "validation_error": (
+            "Les données fournies sont invalides.",
+            "Validation error: {details}"
+        ),
+        "unknown_error": (
+            "Une erreur inattendue s'est produite. Veuillez réessayer.",
+            "Unexpected error: {details}"
+        ),
+    }
+    
+    @staticmethod
+    def show_error(error_type: str, details: str = None, parent=None):
+        """
+        Affiche un message d'erreur à l'utilisateur et enregistre pour le développeur
+        
+        Args:
+            error_type: Type d'erreur (clé du mapping)
+            details: Détails techniques de l'erreur
+            parent: Widget parent (optionnel)
+        """
+        user_msg, log_template = ErrorManager.ERROR_MESSAGES.get(
+            error_type, 
+            ErrorManager.ERROR_MESSAGES["unknown_error"]
+        )
+        
+        # Enregistrer le message complet pour le développeur
+        log_msg = log_template.format(details=details or "No details provided")
+        logger.error(log_msg)
+        
+        # Afficher un message simple à l'utilisateur
+        messagebox.showerror("Erreur", user_msg, parent=parent)
+    
+    @staticmethod
+    def show_success(title: str, message: str, parent=None):
+        """Affiche un message de succès à l'utilisateur"""
+        messagebox.showinfo(title, message, parent=parent)
+    
+    @staticmethod
+    def show_warning(title: str, message: str, parent=None):
+        """Affiche un avertissement à l'utilisateur"""
+        messagebox.showwarning(title, message, parent=parent)
+
+
+class ModernDialog:
+    """Classe pour créer des dialogues modernes avec style cohérent"""
+    
+    @staticmethod
+    def create_centered_dialog(parent_dashboard, title: str, width: int = 520, height: int = 480):
+        """Crée et centre un dialogue sur le dashboard"""
+        dialog = ctk.CTkToplevel(parent_dashboard)
+        dialog.title(title)
+        
+        # Centrer sur le dashboard
+        dashboard_x = parent_dashboard.winfo_rootx()
+        dashboard_y = parent_dashboard.winfo_rooty()
+        dashboard_width = parent_dashboard.winfo_width()
+        dashboard_height = parent_dashboard.winfo_height()
+        
+        center_x = dashboard_x + (dashboard_width - width) // 2
+        center_y = dashboard_y + (dashboard_height - height) // 2
+        
+        dialog.geometry(f"{width}x{height}+{center_x}+{center_y}")
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        
+        return dialog
+    
+    @staticmethod
+    def create_header(parent, title: str, subtitle: str = "", bg_color: str = "#0a84ff"):
+        """Crée un en-tête coloré"""
+        header = ctk.CTkFrame(parent, fg_color=bg_color, corner_radius=0)
+        header.pack(fill="x", side="top")
+        
+        title_label = ctk.CTkLabel(
+            header,
+            text=title,
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#ffffff"
+        )
+        title_label.pack(pady=(15, 8 if subtitle else 15), padx=20)
+        
+        if subtitle:
+            subtitle_label = ctk.CTkLabel(
+                header,
+                text=subtitle,
+                font=ctk.CTkFont(size=12),
+                text_color="#e8f4ff"
+            )
+            subtitle_label.pack(pady=(0, 15), padx=20)
+        
+        return header
+    
+    @staticmethod
+    def create_content_frame(parent):
+        """Crée un frame de contenu avec le bon style"""
+        return ctk.CTkFrame(parent, fg_color="#f8f9fa")
+    
+    @staticmethod
+    def create_button_frame(parent):
+        """Crée un frame pour les boutons"""
+        return ctk.CTkFrame(parent, fg_color="transparent")
+
+
 class Tooltip:
     """Simple tooltip that appears as a label next to the widget"""
     def __init__(self, widget, text: str):
@@ -3090,12 +3222,12 @@ class AdminDashboard(ctk.CTkFrame):
         def save_payment():
             amount_text = amount_entry.get().strip().replace(",", ".")
             if not amount_text:
-                messagebox.showerror("Erreur", "Veuillez saisir un montant.")
+                ErrorManager.show_error("validation_error", "Empty amount field", dialog)
                 return
             try:
                 amount_usd = Decimal(amount_text)
                 if amount_usd <= 0:
-                    messagebox.showerror("Erreur", "Le montant doit être supérieur à 0.")
+                    ErrorManager.show_error("payment_invalid_amount", f"Amount {amount_usd} is not positive", dialog)
                     return
 
                 finance = self.finance_service.get_student_finance(student_id)
@@ -3111,6 +3243,17 @@ class AdminDashboard(ctk.CTkFrame):
                             final_fee = year.get("final_fee")
                     final_fee = Decimal(str(final_fee or finance.get("threshold_required") or 0))
                     current_paid = Decimal(str(finance.get("amount_paid") or 0))
+                    
+                    # Vérifier si l'étudiant a déjà tout payé
+                    if final_fee > 0 and current_paid >= final_fee:
+                        ErrorManager.show_error(
+                            "payment_already_paid",
+                            f"Student {student_id} has already paid ${current_paid:.2f} (total: ${final_fee:.2f})",
+                            dialog
+                        )
+                        return
+                    
+                    # Vérifier si le montant dépasse la limite
                     if final_fee > 0 and (current_paid + amount_usd) > final_fee:
                         remaining = final_fee - current_paid
                         if remaining < 0:
@@ -3143,7 +3286,7 @@ class AdminDashboard(ctk.CTkFrame):
                         if success:
                             update_progress(100, "Paiement enregistré ✓")
                             self.after(1500, lambda: [
-                                messagebox.showinfo("Succès", "Paiement enregistré avec succès."),
+                                ErrorManager.show_success("Succès", "Paiement enregistré avec succès.", dialog),
                                 dialog.destroy(),
                                 self._render_current_view()
                             ])
@@ -3152,15 +3295,15 @@ class AdminDashboard(ctk.CTkFrame):
                             save_btn.configure(state="normal")
                             amount_entry.configure(state="normal")
                             if error_msg:
-                                messagebox.showerror("Erreur", f"Échec de l'enregistrement du paiement: {error_msg}")
+                                ErrorManager.show_error("payment_processing", error_msg, dialog)
                             else:
-                                messagebox.showerror("Erreur", "Échec de l'enregistrement du paiement.")
+                                ErrorManager.show_error("payment_processing", "Unknown error", dialog)
 
                     self.after(0, finish)
 
                 threading.Thread(target=worker, daemon=True).start()
-            except Exception:
-                messagebox.showerror("Erreur", "Montant invalide.")
+            except Exception as ex:
+                ErrorManager.show_error("payment_invalid_amount", str(ex), dialog)
 
         # === BOUTONS ===
         button_frame = ctk.CTkFrame(content, fg_color="transparent")

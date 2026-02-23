@@ -2449,13 +2449,13 @@ class AdminDashboard(ctk.CTkFrame):
         dialog = ctk.CTkToplevel(self)
         dialog.title("Inscription Étudiant")
         
-        # Responsive sizing: petit écran = compact, grand écran = plus grand
+        # Responsive sizing: compact pour tenir dans l'écran
         if self.screen_width < 1200:
             dialog_width = min(520, max(420, int(self.screen_width * 0.45)))
-            dialog_height = min(750, max(650, int(self.screen_height * 0.75)))
+            dialog_height = min(650, max(550, int(self.screen_height * 0.65)))
         else:
             dialog_width = min(600, max(520, int(self.screen_width * 0.4)))
-            dialog_height = min(800, max(700, int(self.screen_height * 0.8)))
+            dialog_height = min(700, max(600, int(self.screen_height * 0.70)))
         
         dialog.geometry(f"{dialog_width}x{dialog_height}")
         dialog.grab_set()
@@ -2465,31 +2465,31 @@ class AdminDashboard(ctk.CTkFrame):
         
         self._animate_window_open(dialog)
 
-        # === HEADER ÉLÉGANT ===
-        header = ctk.CTkFrame(dialog, fg_color=self.colors["primary"], corner_radius=0, height=70)
+        # === HEADER ÉLÉGANT (COMPACT) ===
+        header = ctk.CTkFrame(dialog, fg_color=self.colors["primary"], corner_radius=0, height=55)
         header.pack(fill="x", side="top")
         header.pack_propagate(False)
 
         header_content = ctk.CTkFrame(header, fg_color="transparent")
-        header_content.pack(fill="both", expand=True, padx=20, pady=15)
+        header_content.pack(fill="both", expand=True, padx=20, pady=10)
 
         ctk.CTkLabel(
             header_content,
             text="➕ Nouvel Étudiant",
-            font=self._font(20, "bold"),
+            font=self._font(18, "bold"),
             text_color=self.colors["text_white"]
         ).pack(side="left")
 
         ctk.CTkLabel(
             header_content,
             text="Remplissez tous les champs requis",
-            font=self._font(11),
+            font=self._font(10),
             text_color="#e5f0ff"
         ).pack(side="left", padx=(15, 0))
 
         # === SCROLL FORM CONTAINER ===
         form_outer = ctk.CTkFrame(dialog, fg_color="transparent")
-        form_outer.pack(fill="both", expand=True, padx=20, pady=15)
+        form_outer.pack(fill="both", expand=True, padx=15, pady=12)
 
         form_scroll = ctk.CTkScrollableFrame(
             form_outer,
@@ -2503,23 +2503,23 @@ class AdminDashboard(ctk.CTkFrame):
 
         # === SECTION: IDENTITÉ ===
         section_identity = ctk.CTkFrame(form_scroll, fg_color=self.colors["card_bg"], corner_radius=10)
-        section_identity.pack(fill="x", pady=(0, 12))
+        section_identity.pack(fill="x", pady=(0, 8))
 
         ctk.CTkLabel(
             section_identity,
             text="👤 Informations personnelles",
-            font=self._font(13, "bold"),
+            font=self._font(12, "bold"),
             text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=12, pady=(10, 8))
+        ).pack(anchor="w", padx=10, pady=(8, 6))
 
         identity_frame = ctk.CTkFrame(section_identity, fg_color="transparent")
-        identity_frame.pack(fill="x", padx=12, pady=(0, 10))
+        identity_frame.pack(fill="x", padx=10, pady=(0, 8))
         identity_frame.grid_columnconfigure(0, weight=1)
         identity_frame.grid_columnconfigure(1, weight=1)
 
         def add_labeled_entry(parent, label_text, placeholder="", row=0, col=0, col_span=1):
-            label = ctk.CTkLabel(parent, text=label_text, font=self._font(11), text_color=self.colors["text_light"])
-            label.grid(row=row, column=col, sticky="w", padx=5, pady=(8, 2), columnspan=col_span)
+            label = ctk.CTkLabel(parent, text=label_text, font=self._font(10), text_color=self.colors["text_light"])
+            label.grid(row=row, column=col, sticky="w", padx=4, pady=(5, 1), columnspan=col_span)
             entry = ctk.CTkEntry(
                 parent,
                 placeholder_text=placeholder,
@@ -2527,9 +2527,9 @@ class AdminDashboard(ctk.CTkFrame):
                 border_color=self.colors["border"],
                 border_width=1,
                 corner_radius=6,
-                height=32
+                height=28
             )
-            entry.grid(row=row + 1, column=col, columnspan=col_span, sticky="ew", padx=5, pady=(0, 6))
+            entry.grid(row=row + 1, column=col, columnspan=col_span, sticky="ew", padx=4, pady=(0, 4))
             return entry
 
         student_number_entry = add_labeled_entry(identity_frame, "Numéro étudiant *", "STU2026-001", row=0, col=0)
@@ -2540,17 +2540,17 @@ class AdminDashboard(ctk.CTkFrame):
 
         # === SECTION: ACADÉMIQUE ===
         section_academic = ctk.CTkFrame(form_scroll, fg_color=self.colors["card_bg"], corner_radius=10)
-        section_academic.pack(fill="x", pady=(0, 12))
+        section_academic.pack(fill="x", pady=(0, 8))
 
         ctk.CTkLabel(
             section_academic,
             text="🎓 Informations académiques",
-            font=self._font(13, "bold"),
+            font=self._font(12, "bold"),
             text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=12, pady=(10, 8))
+        ).pack(anchor="w", padx=10, pady=(8, 6))
 
         academic_frame = ctk.CTkFrame(section_academic, fg_color="transparent")
-        academic_frame.pack(fill="x", padx=12, pady=(0, 10))
+        academic_frame.pack(fill="x", padx=10, pady=(0, 8))
         academic_frame.grid_columnconfigure(0, weight=1)
         academic_frame.grid_columnconfigure(1, weight=1)
 
@@ -2601,17 +2601,17 @@ class AdminDashboard(ctk.CTkFrame):
 
         # === SECTION: PHOTO ===
         section_photo = ctk.CTkFrame(form_scroll, fg_color=self.colors["card_bg"], corner_radius=10)
-        section_photo.pack(fill="x", pady=(0, 12))
+        section_photo.pack(fill="x", pady=(0, 8))
 
         ctk.CTkLabel(
             section_photo,
             text="📸 Photo du visage (passeport)",
-            font=self._font(13, "bold"),
+            font=self._font(12, "bold"),
             text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=12, pady=(10, 8))
+        ).pack(anchor="w", padx=10, pady=(8, 6))
 
         photo_frame = ctk.CTkFrame(section_photo, fg_color="transparent")
-        photo_frame.pack(fill="x", padx=12, pady=(0, 10))
+        photo_frame.pack(fill="x", padx=10, pady=(0, 6))
         photo_frame.grid_columnconfigure(0, weight=1)
         photo_frame.grid_columnconfigure(1, weight=0)
 
@@ -2623,15 +2623,15 @@ class AdminDashboard(ctk.CTkFrame):
             border_color=self.colors["border"],
             border_width=1,
             corner_radius=6,
-            height=32
+            height=28
         )
-        photo_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        photo_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
 
         choose_btn = ctk.CTkButton(
             photo_frame,
             text="📁 Parcourir",
-            width=90,
-            height=32,
+            width=80,
+            height=28,
             fg_color=self.colors["info"],
             hover_color="#0891b2",
             corner_radius=6
@@ -2639,14 +2639,14 @@ class AdminDashboard(ctk.CTkFrame):
         choose_btn.grid(row=0, column=1)
 
         preview_frame = ctk.CTkFrame(section_photo, fg_color="transparent")
-        preview_frame.pack(fill="x", padx=12, pady=(0, 10))
+        preview_frame.pack(fill="x", padx=10, pady=(0, 6))
 
         ctk.CTkLabel(
             preview_frame,
             text="Aperçu",
-            font=self._font(11),
+            font=self._font(10),
             text_color=self.colors["text_light"]
-        ).pack(anchor="w", pady=(0, 6))
+        ).pack(anchor="w", pady=(0, 4))
 
         preview_image_label = ctk.CTkLabel(preview_frame, text="")
         preview_image_label.pack(anchor="w")
@@ -2654,10 +2654,10 @@ class AdminDashboard(ctk.CTkFrame):
         guidelines = ctk.CTkLabel(
             section_photo,
             text="Fond neutre • Visage centré • Une seule personne • Bonne lumière",
-            font=self._font(10),
+            font=self._font(9),
             text_color=self.colors["text_light"]
         )
-        guidelines.pack(anchor="w", padx=12, pady=(0, 10))
+        guidelines.pack(anchor="w", padx=10, pady=(0, 6))
 
         def choose_photo():
             file_path = filedialog.askopenfilename(
@@ -2668,7 +2668,7 @@ class AdminDashboard(ctk.CTkFrame):
                 photo_path_var.set(file_path)
                 try:
                     image = Image.open(file_path)
-                    image.thumbnail((140, 180))
+                    image.thumbnail((100, 130))
                     ctk_image = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
                     preview_image_label.configure(image=ctk_image)
                     preview_image_label.image = ctk_image
@@ -2679,7 +2679,7 @@ class AdminDashboard(ctk.CTkFrame):
 
         # === SECTION: BOUTONS ===
         button_frame = ctk.CTkFrame(form_scroll, fg_color="transparent")
-        button_frame.pack(fill="x", pady=(8, 0))
+        button_frame.pack(fill="x", pady=(6, 0))
         button_frame.grid_columnconfigure(0, weight=1)
         button_frame.grid_columnconfigure(1, weight=1)
 
@@ -2840,7 +2840,7 @@ class AdminDashboard(ctk.CTkFrame):
             fg_color=self.colors["border"],
             text_color=self.colors["text_dark"],
             hover_color=self.colors["hover"],
-            height=40,
+            height=32,
             corner_radius=8,
             command=dialog.destroy
         )
@@ -2851,7 +2851,7 @@ class AdminDashboard(ctk.CTkFrame):
             text="✓ Valider",
             fg_color=self.colors["success"],
             hover_color="#059669",
-            height=40,
+            height=32,
             corner_radius=8,
             command=save_student
         )
@@ -2862,7 +2862,7 @@ class AdminDashboard(ctk.CTkFrame):
         dialog = ctk.CTkToplevel(self)
         dialog.title("Modifier étudiant")
         dialog_width = min(620, max(520, int(self.screen_width * 0.5)))
-        dialog_height = min(840, max(720, int(self.screen_height * 0.82)))
+        dialog_height = min(720, max(600, int(self.screen_height * 0.72)))
         
         # Centrer sur le dashboard
         dashboard_x = self.winfo_rootx()
@@ -2881,31 +2881,31 @@ class AdminDashboard(ctk.CTkFrame):
         student_id = student.get("id")
         details = self.student_service.get_student_with_academics(student_id) or student
 
-        # === HEADER COLORÉ ===
+        # === HEADER COLORÉ (COMPACT) ===
         header = ctk.CTkFrame(dialog, fg_color="#8b5cf6", corner_radius=0)
         header.pack(fill="x", side="top")
         
         ctk.CTkLabel(
             header,
             text="✏️ Modifier Étudiant",
-            font=ctk.CTkFont(size=18, weight="bold"),
+            font=ctk.CTkFont(size=16, weight="bold"),
             text_color="#ffffff"
-        ).pack(pady=(15, 8), padx=20)
+        ).pack(pady=(12, 6), padx=20)
         
         fullname = f"{details.get('firstname', '')} {details.get('lastname', '')}".strip()
         ctk.CTkLabel(
             header,
             text=fullname or "Aucun nom",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=11),
             text_color="#f3e8ff"
-        ).pack(pady=(0, 15), padx=20)
+        ).pack(pady=(0, 10), padx=20)
 
         # === CONTENU PRINCIPAL ===
         content = ctk.CTkFrame(dialog, fg_color="#f8f9fa")
         content.pack(fill="both", expand=True, padx=0, pady=0)
 
         form_container = ctk.CTkFrame(content, fg_color="transparent")
-        form_container.pack(fill="both", expand=True, padx=20, pady=15)
+        form_container.pack(fill="both", expand=True, padx=15, pady=10)
 
         form = ctk.CTkScrollableFrame(
             form_container,
@@ -2913,18 +2913,18 @@ class AdminDashboard(ctk.CTkFrame):
             scrollbar_button_color=self.colors["border"],
             scrollbar_button_hover_color=self.colors["text_light"]
         )
-        form.pack(fill="both", expand=True, padx=5, pady=5)
+        form.pack(fill="both", expand=True, padx=3, pady=3)
 
         fields_frame = ctk.CTkFrame(form, fg_color="transparent")
-        fields_frame.pack(fill="x", padx=5, pady=5)
+        fields_frame.pack(fill="x", padx=3, pady=3)
         fields_frame.grid_columnconfigure(0, weight=1)
         fields_frame.grid_columnconfigure(1, weight=1)
 
         def add_labeled_entry(label_text, value="", placeholder="", row=0, col=0, col_span=1):
-            label = ctk.CTkLabel(fields_frame, text=label_text, font=self._font(12))
-            label.grid(row=row, column=col, sticky="w", padx=5, pady=(8, 4))
-            entry = ctk.CTkEntry(fields_frame, placeholder_text=placeholder)
-            entry.grid(row=row + 1, column=col, columnspan=col_span, sticky="ew", padx=5)
+            label = ctk.CTkLabel(fields_frame, text=label_text, font=self._font(10))
+            label.grid(row=row, column=col, sticky="w", padx=4, pady=(5, 2))
+            entry = ctk.CTkEntry(fields_frame, placeholder_text=placeholder, height=28)
+            entry.grid(row=row + 1, column=col, columnspan=col_span, sticky="ew", padx=4, pady=(0, 3))
             if value:
                 entry.insert(0, value)
             return entry
@@ -2940,11 +2940,11 @@ class AdminDashboard(ctk.CTkFrame):
         year_map = {(y.get("year_name") or y.get("name")): y.get("academic_year_id") for y in years if (y.get("year_name") or y.get("name"))}
         current_year_name = details.get("academic_year_name") or ""
 
-        ctk.CTkLabel(fields_frame, text="Année académique", font=self._font(12)).grid(row=6, column=0, sticky="w", padx=5, pady=(8, 4))
-        year_entry = ctk.CTkEntry(fields_frame, placeholder_text="Ex: 2024-2025")
+        ctk.CTkLabel(fields_frame, text="Année académique", font=self._font(10)).grid(row=6, column=0, sticky="w", padx=4, pady=(5, 2))
+        year_entry = ctk.CTkEntry(fields_frame, placeholder_text="Ex: 2024-2025", height=28)
         if current_year_name:
             year_entry.insert(0, current_year_name)
-        year_entry.grid(row=7, column=0, columnspan=2, sticky="ew", padx=5)
+        year_entry.grid(row=7, column=0, columnspan=2, sticky="ew", padx=4, pady=(0, 3))
 
         faculty_display = details.get("faculty_name") or ""
         if details.get("faculty_code"):
@@ -2959,32 +2959,32 @@ class AdminDashboard(ctk.CTkFrame):
         promotion_entry = add_labeled_entry("Promotion", promotion_display, "Ex: L3-LMD/G.I", row=10, col=0, col_span=2)
 
         photo_row = ctk.CTkFrame(form, fg_color="transparent")
-        photo_row.pack(fill="x", pady=(10, 2))
+        photo_row.pack(fill="x", pady=(6, 0))
         photo_row.grid_columnconfigure(0, weight=0)
         photo_row.grid_columnconfigure(1, weight=1)
         photo_row.grid_columnconfigure(2, weight=0)
 
-        ctk.CTkLabel(photo_row, text="Photo du visage (passeport)", font=self._font(12)).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ctk.CTkLabel(photo_row, text="Photo du visage (passeport)", font=self._font(10)).grid(row=0, column=0, sticky="w", padx=(0, 6))
         photo_path_var = StringVar(value="")
-        photo_entry = ctk.CTkEntry(photo_row, textvariable=photo_path_var)
+        photo_entry = ctk.CTkEntry(photo_row, textvariable=photo_path_var, height=28)
         photo_entry.grid(row=0, column=1, sticky="ew")
 
         preview_frame = ctk.CTkFrame(form, fg_color="transparent")
-        preview_frame.pack(fill="x", pady=(8, 4))
+        preview_frame.pack(fill="x", pady=(4, 2))
         preview_label = ctk.CTkLabel(
             preview_frame,
             text="Aperçu photo",
-            font=self._font(11),
+            font=self._font(10),
             text_color=self.colors["text_light"]
         )
         preview_label.pack(anchor="w")
 
         preview_image_label = ctk.CTkLabel(preview_frame, text="")
-        preview_image_label.pack(anchor="w", pady=(6, 0))
+        preview_image_label.pack(anchor="w", pady=(2, 0))
 
         existing_photo_path = details.get("passport_photo_path")
         existing_photo_blob = details.get("passport_photo_blob")
-        existing_image = self._get_cached_photo(existing_photo_path, existing_photo_blob, size=(140, 180))
+        existing_image = self._get_cached_photo(existing_photo_path, existing_photo_blob, size=(80, 100))
         if existing_image:
             preview_image_label.configure(image=existing_image)
             preview_image_label.image = existing_image
@@ -2998,15 +2998,15 @@ class AdminDashboard(ctk.CTkFrame):
                 photo_path_var.set(file_path)
                 try:
                     image = Image.open(file_path)
-                    image.thumbnail((140, 180))
+                    image.thumbnail((80, 100))
                     ctk_image = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
                     preview_image_label.configure(image=ctk_image)
                     preview_image_label.image = ctk_image
                 except Exception as e:
                     logger.warning(f"Preview photo error: {e}")
 
-        choose_btn = ctk.CTkButton(photo_row, text="Parcourir", width=110, command=choose_photo)
-        choose_btn.grid(row=0, column=2, sticky="e", padx=(10, 0))
+        choose_btn = ctk.CTkButton(photo_row, text="Parcourir", width=80, height=28, command=choose_photo)
+        choose_btn.grid(row=0, column=2, sticky="e", padx=(8, 0))
 
         ctk.CTkLabel(
             form,
@@ -3114,14 +3114,14 @@ class AdminDashboard(ctk.CTkFrame):
                 ErrorManager.show_error("database_query", f"Failed to update student {student_id}", dialog)
 
         button_row = ctk.CTkFrame(form, fg_color="transparent")
-        button_row.pack(fill="x", pady=(10, 16))
+        button_row.pack(fill="x", pady=(8, 10))
 
         save_btn = ctk.CTkButton(
             button_row,
             text="Enregistrer",
             fg_color=self.colors["success"],
             hover_color=self.colors["primary"],
-            height=self._scaled(36),
+            height=32,
             command=save_changes
         )
         save_btn.pack(fill="x")

@@ -2697,7 +2697,7 @@ class AdminDashboard(ctk.CTkFrame):
             photo_path = photo_path_var.get().strip()
 
             if not all([student_number, firstname, lastname, email, phone_number, faculty_label, department_label, promotion_label, photo_path, selected_year_name]):
-                messagebox.showerror("Erreur", "Tous les champs sont obligatoires.")
+                ErrorManager.show_error("validation_error", "All fields are required", dialog)
                 return
 
             if selected_year_name and not selected_year_id:
@@ -2713,21 +2713,21 @@ class AdminDashboard(ctk.CTkFrame):
                 if create_year:
                     selected_year_id = self.academic_year_service.create_year_simple(selected_year_name)
                     if not selected_year_id:
-                        messagebox.showerror("Erreur", f"Impossible de créer l'année académique '{selected_year_name}'.")
+                        ErrorManager.show_error("validation_error", f"Failed to create academic year: {selected_year_name}", dialog)
                         return
                 else:
                     messagebox.showinfo("Annulé", "Veuillez créer l'année académique d'abord dans la section 'Années Académiques'.")
                     return
             
             if not selected_year_id:
-                messagebox.showerror("Erreur", "Année académique requise.")
+                ErrorManager.show_error("validation_error", "Academic year is required", dialog)
                 return
 
             faculty_matches = self.student_service.find_faculty_by_input(faculty_label)
             if not faculty_matches:
                 faculty_id = self.student_service.create_faculty(faculty_label)
                 if not faculty_id:
-                    messagebox.showerror("Erreur", "Impossible de créer la faculté.")
+                    ErrorManager.show_error("validation_error", f"Failed to create faculty: {faculty_label}", dialog)
                     return
             else:
                 faculty_id = faculty_matches[0]["id"]
@@ -2736,7 +2736,7 @@ class AdminDashboard(ctk.CTkFrame):
             if not department_matches:
                 department_id = self.student_service.create_department(department_label, faculty_id)
                 if not department_id:
-                    messagebox.showerror("Erreur", "Impossible de créer le département.")
+                    ErrorManager.show_error("validation_error", f"Failed to create department: {department_label}", dialog)
                     return
             else:
                 department_id = department_matches[0]["id"]
@@ -2745,7 +2745,7 @@ class AdminDashboard(ctk.CTkFrame):
             if not promotion_matches:
                 promotion_id = self.student_service.create_promotion(promotion_label, department_id)
                 if not promotion_id:
-                    messagebox.showerror("Erreur", "Impossible de créer la promotion.")
+                    ErrorManager.show_error("validation_error", f"Failed to create promotion: {promotion_label}", dialog)
                     return
             else:
                 promotion_id = promotion_matches[0]["id"]
@@ -2758,7 +2758,7 @@ class AdminDashboard(ctk.CTkFrame):
                 threshold_required = Decimal(str(year_data.get("threshold_amount", 0)))
                 final_fee_value = Decimal(str(year_data.get("final_fee", threshold_required)))
             else:
-                messagebox.showerror("Erreur", "Impossible de récupérer les informations financières de l'année académique.")
+                ErrorManager.show_error("database_query", f"Failed to fetch academic year data for year_id: {selected_year_id}", dialog)
                 return
 
             encoding = None
@@ -2766,16 +2766,16 @@ class AdminDashboard(ctk.CTkFrame):
                 try:
                     encoding = self.face_service.register_face(photo_path, 1)
                 except Exception as e:
-                    messagebox.showerror("Erreur", f"Erreur photo: {e}")
+                    ErrorManager.show_error("validation_error", f"Face registration failed: {str(e)}", dialog)
                     return
 
                 if encoding is None:
-                    messagebox.showerror("Erreur", "Aucun visage détecté (ou plusieurs visages). Utilisez une photo passeport.")
+                    ErrorManager.show_error("validation_error", "No face detected or multiple faces found. Use a passport photo.", dialog)
                     return
 
                 quality_ok, quality_msg = self.face_service.validate_passport_photo(photo_path)
                 if not quality_ok:
-                    messagebox.showerror("Qualité photo insuffisante", quality_msg)
+                    ErrorManager.show_error("validation_error", f"Photo quality insufficient: {quality_msg}", dialog)
                     return
             else:
                 messagebox.showwarning(
@@ -2793,7 +2793,7 @@ class AdminDashboard(ctk.CTkFrame):
                 with open(stored_photo_path, "rb") as f:
                     photo_blob = f.read()
             except Exception as e:
-                messagebox.showerror("Erreur", f"Impossible de sauvegarder la photo: {e}")
+                ErrorManager.show_error("validation_error", f"Failed to save photo: {str(e)}", dialog)
                 return
 
             face_bytes = encoding.tobytes() if encoding is not None else None
@@ -2811,12 +2811,12 @@ class AdminDashboard(ctk.CTkFrame):
 
             student_id = self.auth_service.register_student_with_face(student, None, face_bytes)
             if not student_id:
-                messagebox.showerror("Erreur", "Échec d'enregistrement de l'étudiant.")
+                ErrorManager.show_error("database_query", "Failed to register student", dialog)
                 return
 
             finance_ok = self.finance_service.create_finance_profile(student_id, threshold_required, selected_year_id)
             if not finance_ok:
-                messagebox.showwarning("Attention", "Profil financier non créé.")
+                logger.warning(f"Finance profile not created for student {student_id}")
 
             try:
                 self.notification_service.send_welcome_notification(
@@ -2830,7 +2830,7 @@ class AdminDashboard(ctk.CTkFrame):
             except Exception as e:
                 logger.warning(f"Failed to send welcome notification: {e}")
 
-            messagebox.showinfo("Succès", "Étudiant enregistré avec succès.")
+            ErrorManager.show_success("Succès", "Étudiant enregistré avec succès.", dialog)
             dialog.destroy()
             self._show_students()
 
@@ -2863,22 +2863,49 @@ class AdminDashboard(ctk.CTkFrame):
         dialog.title("Modifier étudiant")
         dialog_width = min(620, max(520, int(self.screen_width * 0.5)))
         dialog_height = min(840, max(720, int(self.screen_height * 0.82)))
-        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        
+        # Centrer sur le dashboard
+        dashboard_x = self.winfo_rootx()
+        dashboard_y = self.winfo_rooty()
+        dashboard_width = self.winfo_width()
+        dashboard_height = self.winfo_height()
+        
+        center_x = dashboard_x + (dashboard_width - dialog_width) // 2
+        center_y = dashboard_y + (dashboard_height - dialog_height) // 2
+        
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{center_x}+{center_y}")
         dialog.grab_set()
+        dialog.resizable(False, False)
         self._animate_window_open(dialog)
 
         student_id = student.get("id")
         details = self.student_service.get_student_with_academics(student_id) or student
 
+        # === HEADER COLORÉ ===
+        header = ctk.CTkFrame(dialog, fg_color="#8b5cf6", corner_radius=0)
+        header.pack(fill="x", side="top")
+        
         ctk.CTkLabel(
-            dialog,
+            header,
             text="✏️ Modifier Étudiant",
-            font=self._font(20, "bold"),
-            text_color=self.colors["text_dark"]
-        ).pack(pady=(self._scaled(18), self._scaled(8)))
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#ffffff"
+        ).pack(pady=(15, 8), padx=20)
+        
+        fullname = f"{details.get('firstname', '')} {details.get('lastname', '')}".strip()
+        ctk.CTkLabel(
+            header,
+            text=fullname or "Aucun nom",
+            font=ctk.CTkFont(size=12),
+            text_color="#f3e8ff"
+        ).pack(pady=(0, 15), padx=20)
 
-        form_container = ctk.CTkFrame(dialog, fg_color="transparent")
-        form_container.pack(fill="both", expand=True, padx=self._scaled(18), pady=self._scaled(10))
+        # === CONTENU PRINCIPAL ===
+        content = ctk.CTkFrame(dialog, fg_color="#f8f9fa")
+        content.pack(fill="both", expand=True, padx=0, pady=0)
+
+        form_container = ctk.CTkFrame(content, fg_color="transparent")
+        form_container.pack(fill="both", expand=True, padx=20, pady=15)
 
         form = ctk.CTkScrollableFrame(
             form_container,
@@ -3002,7 +3029,7 @@ class AdminDashboard(ctk.CTkFrame):
             photo_path = photo_path_var.get().strip()
 
             if not all([student_number, firstname, lastname, email, phone_number, faculty_label, department_label, promotion_label, selected_year_name]):
-                messagebox.showerror("Erreur", "Tous les champs sont obligatoires.")
+                ErrorManager.show_error("validation_error", "All fields are required", dialog)
                 return
 
             if selected_year_name and not selected_year_id:
@@ -3019,7 +3046,7 @@ class AdminDashboard(ctk.CTkFrame):
                 if create_year:
                     selected_year_id = self.academic_year_service.create_year_simple(selected_year_name)
                     if not selected_year_id:
-                        messagebox.showerror("Erreur", f"Impossible de créer l'année académique '{selected_year_name}'.")
+                        ErrorManager.show_error("validation_error", f"Failed to create academic year: {selected_year_name}", dialog)
                         return
                 else:
                     messagebox.showinfo("Annulé", "Veuillez créer l'année académique d'abord dans la section 'Années Académiques'.")
@@ -3029,7 +3056,7 @@ class AdminDashboard(ctk.CTkFrame):
             if not faculty_matches:
                 faculty_id = self.student_service.create_faculty(faculty_label)
                 if not faculty_id:
-                    messagebox.showerror("Erreur", "Impossible de créer la faculté.")
+                    ErrorManager.show_error("validation_error", f"Failed to create faculty: {faculty_label}", dialog)
                     return
             else:
                 faculty_id = faculty_matches[0]["id"]
@@ -3038,7 +3065,7 @@ class AdminDashboard(ctk.CTkFrame):
             if not department_matches:
                 department_id = self.student_service.create_department(department_label, faculty_id)
                 if not department_id:
-                    messagebox.showerror("Erreur", "Impossible de créer le département.")
+                    ErrorManager.show_error("validation_error", f"Failed to create department: {department_label}", dialog)
                     return
             else:
                 department_id = department_matches[0]["id"]
@@ -3047,7 +3074,7 @@ class AdminDashboard(ctk.CTkFrame):
             if not promotion_matches:
                 promotion_id = self.student_service.create_promotion(promotion_label, department_id)
                 if not promotion_id:
-                    messagebox.showerror("Erreur", "Impossible de créer la promotion.")
+                    ErrorManager.show_error("validation_error", f"Failed to create promotion: {promotion_label}", dialog)
                     return
             else:
                 promotion_id = promotion_matches[0]["id"]
@@ -3075,16 +3102,16 @@ class AdminDashboard(ctk.CTkFrame):
                     update_data["passport_photo_path"] = stored_photo_path
                     update_data["passport_photo_blob"] = photo_blob
                 except Exception as e:
-                    messagebox.showerror("Erreur", f"Impossible de sauvegarder la photo: {e}")
+                    ErrorManager.show_error("validation_error", f"Failed to save photo: {str(e)}", dialog)
                     return
 
             logger.debug(f"Updating student {student_id} with data: {update_data}")
             if self.student_service.update_student(student_id, update_data):
-                messagebox.showinfo("Succès", "Étudiant modifié avec succès.")
+                ErrorManager.show_success("Succès", "Étudiant modifié avec succès.", dialog)
                 dialog.destroy()
                 self._show_students()
             else:
-                messagebox.showerror("Erreur", "Échec de la modification. Consultez les logs pour plus de détails.")
+                ErrorManager.show_error("database_query", f"Failed to update student {student_id}", dialog)
 
         button_row = ctk.CTkFrame(form, fg_color="transparent")
         button_row.pack(fill="x", pady=(10, 16))
@@ -3341,42 +3368,68 @@ class AdminDashboard(ctk.CTkFrame):
         dialog.title("Historique des paiements")
         dialog_width = min(720, max(560, int(self.screen_width * 0.6)))
         dialog_height = min(600, max(420, int(self.screen_height * 0.7)))
-        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        
+        # Centrer sur le dashboard
+        dashboard_x = self.winfo_rootx()
+        dashboard_y = self.winfo_rooty()
+        dashboard_width = self.winfo_width()
+        dashboard_height = self.winfo_height()
+        
+        center_x = dashboard_x + (dashboard_width - dialog_width) // 2
+        center_y = dashboard_y + (dashboard_height - dialog_height) // 2
+        
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{center_x}+{center_y}")
         dialog.grab_set()
+        dialog.resizable(False, False)
         self._animate_window_open(dialog)
 
         fullname = f"{student.get('firstname', '')} {student.get('lastname', '')}".strip()
         student_number = student.get("student_number", "-")
         student_id = student.get("id")
 
+        # === HEADER COLORÉ ===
+        header = ctk.CTkFrame(dialog, fg_color="#6366f1", corner_radius=0)
+        header.pack(fill="x", side="top")
+        
         ctk.CTkLabel(
-            dialog,
-            text="🧾 Historique des paiements",
-            font=self._font(18, "bold"),
-            text_color=self.colors["text_dark"]
-        ).pack(pady=(20, 8))
+            header,
+            text="🧾 Historique des Paiements",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#ffffff"
+        ).pack(pady=(15, 8), padx=20)
+        
+        ctk.CTkLabel(
+            header,
+            text=f"{fullname} • #{student_number}",
+            font=ctk.CTkFont(size=12),
+            text_color="#e0e7ff"
+        ).pack(pady=(0, 15), padx=20)
 
-        ctk.CTkLabel(
-            dialog,
-            text=f"{fullname} ({student_number})",
-            font=self._font(12),
-            text_color=self.colors["text_light"]
-        ).pack(pady=(0, 10))
+        # === CONTENU PRINCIPAL ===
+        content = ctk.CTkFrame(dialog, fg_color="#f8f9fa")
+        content.pack(fill="both", expand=True, padx=0, pady=0)
+
+        # Info access code
+        info_frame = ctk.CTkFrame(content, fg_color="transparent")
+        info_frame.pack(fill="x", padx=20, pady=12)
 
         access_code = self.finance_service.get_latest_access_code(student_id)
         if access_code:
             code_text = f"Code actuel: {access_code.get('access_code')} ({access_code.get('access_type')})"
+            code_color = "#10b981"
         else:
             code_text = "Code actuel: Aucun code généré"
+            code_color = "#cbd5e1"
 
         ctk.CTkLabel(
-            dialog,
+            info_frame,
             text=code_text,
-            font=self._font(12, "bold"),
-            text_color=self.colors["info"] if access_code else self.colors["text_light"]
-        ).pack(pady=(0, 12))
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=code_color
+        ).pack(anchor="w")
 
-        table = ctk.CTkFrame(dialog, fg_color=self.colors["hover"], corner_radius=8)
+        # === TABLE ===
+        table = ctk.CTkFrame(content, fg_color="#ffffff", corner_radius=8, border_width=1, border_color="#e2e8f0")
         table.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
         headers = ["Date", "Montant ($)", "Méthode"]

@@ -1,0 +1,10 @@
+# Dépendances pour l'API de Transfert
+
+Flask==2.3.0
+Flask-CORS==4.0.0
+PyJWT==2.8.0
+mysql-connector-python==8.1.0
+
+# Pour la production
+gunicorn==21.2.0
+python-dotenv==1.0.0

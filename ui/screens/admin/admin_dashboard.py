@@ -23,6 +23,7 @@ from app.services.finance.finance_service import FinanceService
 from app.services.finance.academic_year_service import AcademicYearService
 from app.services.integration.notification_service import NotificationService
 from app.services.integration.esp32_status_service import ESP32StatusService
+from app.services.transfer.transfer_service import TransferService
 from core.models.student import Student
 
 logger = logging.getLogger(__name__)
@@ -238,6 +239,7 @@ class AdminDashboard(ctk.CTkFrame):
         self.academic_year_service = AcademicYearService()
         self.notification_service = NotificationService()
         self.esp32_service = ESP32StatusService()
+        self.transfer_service = TransferService()
         self._photo_cache = {}
         self._esp32_status_label = None
         self._responsive_labels = []
@@ -379,7 +381,8 @@ class AdminDashboard(ctk.CTkFrame):
             "finance": self._show_finance,
             "access_logs": self._show_access_logs,
             "reports": self._show_reports,
-            "academic_years": self._show_academic_years
+            "academic_years": self._show_academic_years,
+            "transfers": self._show_transfers
         }
         view_map.get(self.current_view, self._show_dashboard)()
 
@@ -491,7 +494,8 @@ class AdminDashboard(ctk.CTkFrame):
             ("👥", "students", self._t("students", "Étudiants"), lambda: self._run_with_loading(self._show_students)),
             ("💰", "finance", self._t("finance", "Finances"), lambda: self._run_with_loading(self._show_finance)),
             ("📚", "academic_years", self._t("academic_years", "Années Acad."), lambda: self._run_with_loading(self._show_academic_years)),
-            ("📋", "access_logs", self._t("access_logs", "Logs d'Accès"), lambda: self._run_with_loading(self._show_access_logs)),
+            ("�", "transfers", self._t("transfers", "Transferts"), lambda: self._run_with_loading(self._show_transfers)),
+            ("�📋", "access_logs", self._t("access_logs", "Logs d'Accès"), lambda: self._run_with_loading(self._show_access_logs)),
             ("📈", "reports", self._t("reports", "Rapports"), lambda: self._run_with_loading(self._show_reports)),
         ]
         
@@ -3810,17 +3814,6 @@ class AdminDashboard(ctk.CTkFrame):
         self.title_label.configure(text=self._t("reports_title", "Rapports et Statistiques"))
         self.subtitle_label.configure(text=self._t("reports_subtitle", "Analyse par faculté et performance"))
         
-        # === HEADER ===
-        header = ctk.CTkFrame(self.content_frame, fg_color="transparent")
-        header.pack(fill="x", pady=(0, 20))
-        
-        ctk.CTkLabel(
-            header,
-            text="📈 Rapports et Statistiques",
-            font=ctk.CTkFont(size=24, weight="bold"),
-            text_color=self.colors["text_dark"]
-        ).pack(side="left")
-        
         # === FILTRES ===
         filter_frame = ctk.CTkFrame(self.content_frame, fg_color=self.colors["hover"], corner_radius=8)
         filter_frame.pack(fill="x", pady=(0, 20), padx=20)
@@ -3832,11 +3825,6 @@ class AdminDashboard(ctk.CTkFrame):
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color=self.colors["text_dark"]
         ).pack(side="left", padx=(15, 20), pady=10)
-        
-        faculties = ["Toutes", "Informatique", "Gestion", "Sciences", "Droit"]
-        faculty_combo = ctk.CTkComboBox(filter_frame, values=faculties, width=150, height=30)
-        faculty_combo.set("Toutes")
-        faculty_combo.pack(side="left", padx=10, pady=10)
         
         # === RAPPORTS PAR FACULTÉ ===
         report_card = self._create_card(self.content_frame)
@@ -3862,62 +3850,79 @@ class AdminDashboard(ctk.CTkFrame):
         scroll_frame.pack(fill="both", expand=True, padx=25, pady=(15, 20))
         
         faculties_data = self.dashboard_service.get_faculty_stats_with_photos()
-        if not faculties_data:
-            ctk.CTkLabel(
-                scroll_frame,
-                text="Aucune statistique disponible.",
-                font=ctk.CTkFont(size=12),
-                text_color=self.colors["text_light"]
-            ).pack(pady=20)
-            return
+        faculty_names = sorted({f.get("faculty_name") for f in faculties_data if f.get("faculty_name")})
+        faculties = ["Toutes"] + faculty_names
+        faculty_combo = ctk.CTkComboBox(filter_frame, values=faculties, width=150, height=30)
+        faculty_combo.set("Toutes")
+        faculty_combo.pack(side="left", padx=10, pady=10)
 
-        for faculty in faculties_data:
-            row = ctk.CTkFrame(scroll_frame, fg_color=self.colors["hover"], corner_radius=6)
-            row.pack(fill="x", pady=4)
+        def render_faculty_stats(selected_faculty: str):
+            for widget in scroll_frame.winfo_children():
+                widget.destroy()
 
-            self._configure_table_columns(row, column_weights, min_widths=min_widths)
-            total = int(faculty.get('total_students') or 0)
-            eligible = int(faculty.get('eligible_students') or 0)
-            percentage = (eligible / total * 100) if total else 0
-            revenue = Decimal(str(faculty.get('revenue') or 0))
+            data = faculties_data
+            if selected_faculty != "Toutes":
+                data = [f for f in faculties_data if f.get("faculty_name") == selected_faculty]
 
-            self._render_photo_cell(
-                row,
-                0,
-                photo_path=faculty.get('passport_photo_path'),
-                photo_blob=faculty.get('passport_photo_blob'),
-                size=(36, 44)
-            )
-            row_values = [
-                faculty.get('faculty_name') or "-",
-                faculty.get('department_name') or "-",
-                str(total),
-                str(eligible),
-                f"{percentage:.1f}%",
-                self._format_usd(revenue)
-            ]
-            row_colors = [
-                self.colors["text_dark"],
-                self.colors["text_light"],
-                self.colors["text_dark"],
-                self.colors["success"],
-                self.colors["primary"],
-                self.colors["warning"],
-            ]
-            row_weights = ["bold", "normal", "normal", "bold", "bold", "normal"]
-            layout = self._get_table_layout("reports_faculty")
-            row_anchors = layout["anchors"][1:]
-            row_min_widths = min_widths[1:] if min_widths else None
-            self._populate_table_row_with_offset(
-                row,
-                row_values,
-                column_weights,
-                start_col=1,
-                text_colors=row_colors,
-                font_weights=row_weights,
-                anchors=row_anchors,
-                min_widths=row_min_widths
-            )
+            if not data:
+                ctk.CTkLabel(
+                    scroll_frame,
+                    text="Aucune statistique disponible.",
+                    font=ctk.CTkFont(size=12),
+                    text_color=self.colors["text_light"]
+                ).pack(pady=20)
+                return
+
+            for faculty in data:
+                row = ctk.CTkFrame(scroll_frame, fg_color=self.colors["hover"], corner_radius=6)
+                row.pack(fill="x", pady=4)
+
+                self._configure_table_columns(row, column_weights, min_widths=min_widths)
+                total = int(faculty.get('total_students') or 0)
+                eligible = int(faculty.get('eligible_students') or 0)
+                percentage = (eligible / total * 100) if total else 0
+                revenue = Decimal(str(faculty.get('revenue') or 0))
+
+                self._render_photo_cell(
+                    row,
+                    0,
+                    photo_path=faculty.get('passport_photo_path'),
+                    photo_blob=faculty.get('passport_photo_blob'),
+                    size=(36, 44)
+                )
+                row_values = [
+                    faculty.get('faculty_name') or "-",
+                    faculty.get('department_name') or "-",
+                    str(total),
+                    str(eligible),
+                    f"{percentage:.1f}%",
+                    self._format_usd(revenue)
+                ]
+                row_colors = [
+                    self.colors["text_dark"],
+                    self.colors["text_light"],
+                    self.colors["text_dark"],
+                    self.colors["success"],
+                    self.colors["primary"],
+                    self.colors["warning"],
+                ]
+                row_weights = ["bold", "normal", "normal", "bold", "bold", "normal"]
+                layout = self._get_table_layout("reports_faculty")
+                row_anchors = layout["anchors"][1:]
+                row_min_widths = min_widths[1:] if min_widths else None
+                self._populate_table_row_with_offset(
+                    row,
+                    row_values,
+                    column_weights,
+                    start_col=1,
+                    text_colors=row_colors,
+                    font_weights=row_weights,
+                    anchors=row_anchors,
+                    min_widths=row_min_widths
+                )
+
+        render_faculty_stats("Toutes")
+        faculty_combo.configure(command=lambda value: render_faculty_stats(value))
     
     def _show_academic_years(self):
         """Affiche la gestion des années académiques"""
@@ -4410,6 +4415,916 @@ class AdminDashboard(ctk.CTkFrame):
             
         except (ValueError, TypeError):
             messagebox.showerror("Erreur", "Veuillez entrer des montants valides (nombres)")
+    
+    # ==================== TRANSFERS VIEW ====================
+    
+    def _show_transfers(self):
+        """Affiche la page de gestion des transferts inter-universitaires"""
+        self.current_view = "transfers"
+        self._set_main_scrollbar_visible(True)
+        self._update_nav_buttons("transfers")
+        self.title_label.configure(text="🔄 Transferts Inter-Universitaires")
+        self._clear_content()
+        
+        # Tabs container
+        tabs_container = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        tabs_container.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Tab buttons
+        tab_frame = ctk.CTkFrame(tabs_container, fg_color=self.colors["card_bg"], corner_radius=10)
+        tab_frame.pack(fill="x", pady=(0, 20))
+        
+        tab_buttons_frame = ctk.CTkFrame(tab_frame, fg_color="transparent")
+        tab_buttons_frame.pack(fill="x", padx=10, pady=10)
+        
+        # Active tab tracker
+        self.active_transfer_tab = "outgoing"
+        
+        # Tab buttons
+        tab_buttons = []
+        tabs_data = [
+            ("outgoing", "📤 Transferts Sortants", self._show_outgoing_transfers),
+            ("incoming", "📥 Demandes Entrantes", self._show_incoming_transfers),
+            ("history", "📜 Historique", self._show_transfer_history)
+        ]
+        
+        for tab_key, tab_label, tab_callback in tabs_data:
+            btn = ctk.CTkButton(
+                tab_buttons_frame,
+                text=tab_label,
+                fg_color=self.colors["primary"] if tab_key == "outgoing" else "transparent",
+                hover_color=self.colors["primary"],
+                text_color=self.colors["text_white"] if tab_key == "outgoing" else self.colors["text_dark"],
+                corner_radius=8,
+                height=40,
+                font=ctk.CTkFont(size=13, weight="bold"),
+                command=lambda k=tab_key, c=tab_callback, btns=tab_buttons: self._switch_transfer_tab(k, c, btns)
+            )
+            btn.pack(side="left", padx=5, expand=True, fill="x")
+            tab_buttons.append({"button": btn, "key": tab_key})
+        
+        # Content container for tab views
+        self.transfer_tab_content = ctk.CTkFrame(tabs_container, fg_color="transparent")
+        self.transfer_tab_content.pack(fill="both", expand=True)
+        
+        # Show initial tab
+        self._show_outgoing_transfers()
+    
+    def _switch_transfer_tab(self, tab_key, callback, tab_buttons):
+        """Change d'onglet dans l'interface de transferts"""
+        self.active_transfer_tab = tab_key
+        
+        # Update button colors
+        for tab_btn in tab_buttons:
+            if tab_btn["key"] == tab_key:
+                tab_btn["button"].configure(
+                    fg_color=self.colors["primary"],
+                    text_color=self.colors["text_white"]
+                )
+            else:
+                tab_btn["button"].configure(
+                    fg_color="transparent",
+                    text_color=self.colors["text_dark"]
+                )
+        
+        # Clear and show new content
+        for widget in self.transfer_tab_content.winfo_children():
+            widget.destroy()
+        
+        callback()
+    
+    def _show_outgoing_transfers(self):
+        """Affiche l'interface pour initier un transfert sortant"""
+        container = ctk.CTkScrollableFrame(
+            self.transfer_tab_content,
+            fg_color=self.colors["card_bg"],
+            corner_radius=12
+        )
+        container.pack(fill="both", expand=True)
+        
+        # Header
+        header = ctk.CTkFrame(container, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=20)
+        
+        ctk.CTkLabel(
+            header,
+            text="📤 Initier un Transfert Sortant",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(side="left")
+        
+        # Info card
+        info_card = ctk.CTkFrame(container, fg_color=self.colors["info"], corner_radius=10)
+        info_card.pack(fill="x", padx=20, pady=(0, 20))
+        
+        ctk.CTkLabel(
+            info_card,
+            text="ℹ️  Transférez les données académiques d'un étudiant vers une autre université.\n"
+                 "Les données de paiement ne sont jamais transférées pour des raisons de confidentialité.",
+            font=ctk.CTkFont(size=11),
+            text_color=self.colors["text_white"],
+            justify="left"
+        ).pack(padx=15, pady=12)
+        
+        # Form
+        form_frame = ctk.CTkFrame(container, fg_color="transparent")
+        form_frame.pack(fill="x", padx=20, pady=10)
+        
+        # Student selection
+        ctk.CTkLabel(
+            form_frame,
+            text="Sélectionner l'étudiant :",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(10, 5))
+        
+        # Get all students
+        students = self._get_all_students_for_transfer()
+        student_options = [f"{s['student_number']} - {s['firstname']} {s['lastname']}" for s in students]
+        
+        self.transfer_student_combo = ctk.CTkComboBox(
+            form_frame,
+            values=student_options if student_options else ["Aucun étudiant disponible"],
+            width=400,
+            height=35,
+            font=ctk.CTkFont(size=12),
+            command=lambda value: self._on_transfer_student_selected(value, students)
+        )
+        self.transfer_student_combo.pack(anchor="w", pady=(0, 15))
+        if student_options:
+            self.transfer_student_combo.set(student_options[0])
+        
+        # Student info display
+        self.transfer_student_info_frame = ctk.CTkFrame(form_frame, fg_color=self.colors["hover"], corner_radius=10)
+        self.transfer_student_info_frame.pack(fill="x", pady=(0, 20))
+        
+        # Initialize with first student
+        if students:
+            self._display_student_transfer_info(students[0])
+        
+        # Destination university
+        ctk.CTkLabel(
+            form_frame,
+            text="Université de destination :",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(10, 5))
+        
+        # Get partner universities
+        partners = self._get_partner_universities()
+        partner_options = [f"{p['university_name']} ({p['university_code']}) - {p['country']}" for p in partners]
+        
+        self.transfer_destination_combo = ctk.CTkComboBox(
+            form_frame,
+            values=partner_options if partner_options else ["Aucune université partenaire"],
+            width=400,
+            height=35,
+            font=ctk.CTkFont(size=12)
+        )
+        self.transfer_destination_combo.pack(anchor="w", pady=(0, 15))
+        if partner_options:
+            self.transfer_destination_combo.set(partner_options[0])
+        
+        # Include documents checkbox
+        self.transfer_include_docs_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            form_frame,
+            text="Inclure les documents et ouvrages",
+            variable=self.transfer_include_docs_var,
+            font=ctk.CTkFont(size=12),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=10)
+        
+        # Notes
+        ctk.CTkLabel(
+            form_frame,
+            text="Notes (optionnel) :",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(10, 5))
+        
+        self.transfer_notes_text = ctk.CTkTextbox(
+            form_frame,
+            width=500,
+            height=80,
+            font=ctk.CTkFont(size=11)
+        )
+        self.transfer_notes_text.pack(anchor="w", pady=(0, 20))
+        
+        # Action buttons
+        button_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=20)
+        
+        ctk.CTkButton(
+            button_frame,
+            text="📤 Générer le Package de Transfert",
+            fg_color=self.colors["success"],
+            hover_color="#059669",
+            text_color=self.colors["text_white"],
+            height=45,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=lambda: self._generate_transfer_package(students, partners)
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            button_frame,
+            text="🔄 Actualiser",
+            fg_color=self.colors["primary"],
+            hover_color="#2563eb",
+            text_color=self.colors["text_white"],
+            height=45,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._show_outgoing_transfers
+        ).pack(side="left", padx=5)
+    
+    def _show_incoming_transfers(self):
+        """Affiche les demandes de transfert entrantes en attente"""
+        container = ctk.CTkScrollableFrame(
+            self.transfer_tab_content,
+            fg_color=self.colors["card_bg"],
+            corner_radius=12
+        )
+        container.pack(fill="both", expand=True)
+        
+        # Header
+        header = ctk.CTkFrame(container, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=20)
+        
+        ctk.CTkLabel(
+            header,
+            text="📥 Demandes de Transfert Entrantes",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(side="left")
+        
+        # Get pending requests
+        pending_requests = self.transfer_service.get_pending_transfer_requests()
+        
+        if not pending_requests:
+            # No requests
+            no_data_frame = ctk.CTkFrame(container, fg_color=self.colors["hover"], corner_radius=10)
+            no_data_frame.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            ctk.CTkLabel(
+                no_data_frame,
+                text="📭 Aucune demande de transfert en attente",
+                font=ctk.CTkFont(size=16),
+                text_color=self.colors["text_light"]
+            ).pack(pady=40)
+        else:
+            # Display requests
+            for request in pending_requests:
+                self._create_transfer_request_card(container, request)
+    
+    def _create_transfer_request_card(self, parent, request):
+        """Crée une carte pour une demande de transfert"""
+        card = ctk.CTkFrame(parent, fg_color=self.colors["hover"], corner_radius=12)
+        card.pack(fill="x", padx=20, pady=10)
+        
+        # Header
+        card_header = ctk.CTkFrame(card, fg_color="transparent")
+        card_header.pack(fill="x", padx=15, pady=12)
+        
+        # Student name
+        ctk.CTkLabel(
+            card_header,
+            text=f"👤 {request['external_firstname']} {request['external_lastname']}",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(side="left")
+        
+        # Status badge
+        status_frame = ctk.CTkFrame(card_header, fg_color=self.colors["warning"], corner_radius=15)
+        status_frame.pack(side="right", padx=5)
+        
+        ctk.CTkLabel(
+            status_frame,
+            text="⏳ EN ATTENTE",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=self.colors["text_white"]
+        ).pack(padx=10, pady=3)
+        
+        # Details
+        details_frame = ctk.CTkFrame(card, fg_color="transparent")
+        details_frame.pack(fill="x", padx=15, pady=(0, 12))
+        
+        details_text = (
+            f"📋 Code: {request['request_code']}\n"
+            f"🏫 Université source: {request['source_university']} ({request.get('source_university_code', 'N/A')})\n"
+            f"📧 Email: {request.get('external_email', 'N/A')}\n"
+            f"☎️ Téléphone: {request.get('external_phone', 'N/A')}\n"
+            f"📅 Date de demande: {request['requested_date'].strftime('%d/%m/%Y %H:%M') if request.get('requested_date') else 'N/A'}"
+        )
+        
+        ctk.CTkLabel(
+            details_frame,
+            text=details_text,
+            font=ctk.CTkFont(size=11),
+            text_color=self.colors["text_dark"],
+            justify="left"
+        ).pack(anchor="w")
+        
+        # Action buttons
+        button_frame = ctk.CTkFrame(card, fg_color="transparent")
+        button_frame.pack(fill="x", padx=15, pady=(0, 12))
+        
+        ctk.CTkButton(
+            button_frame,
+            text="👁️ Voir Détails",
+            fg_color=self.colors["info"],
+            hover_color="#0891b2",
+            text_color=self.colors["text_white"],
+            height=35,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=lambda r=request: self._view_transfer_request_details(r)
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            button_frame,
+            text="✅ Approuver",
+            fg_color=self.colors["success"],
+            hover_color="#059669",
+            text_color=self.colors["text_white"],
+            height=35,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=lambda r=request: self._approve_transfer_request(r)
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            button_frame,
+            text="❌ Rejeter",
+            fg_color=self.colors["danger"],
+            hover_color="#dc2626",
+            text_color=self.colors["text_white"],
+            height=35,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=lambda r=request: self._reject_transfer_request(r)
+        ).pack(side="left", padx=5)
+    
+    def _show_transfer_history(self):
+        """Affiche l'historique des transferts"""
+        container = ctk.CTkScrollableFrame(
+            self.transfer_tab_content,
+            fg_color=self.colors["card_bg"],
+            corner_radius=12
+        )
+        container.pack(fill="both", expand=True)
+        
+        # Header
+        header = ctk.CTkFrame(container, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=20)
+        
+        ctk.CTkLabel(
+            header,
+            text="📜 Historique des Transferts",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(side="left")
+        
+        # Get transfer history
+        history = self.transfer_service.get_transfer_history(limit=50)
+        
+        if not history:
+            # No history
+            no_data_frame = ctk.CTkFrame(container, fg_color=self.colors["hover"], corner_radius=10)
+            no_data_frame.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            ctk.CTkLabel(
+                no_data_frame,
+                text="📭 Aucun transfert enregistré",
+                font=ctk.CTkFont(size=16),
+                text_color=self.colors["text_light"]
+            ).pack(pady=40)
+        else:
+            # Create table header
+            table_header = ctk.CTkFrame(container, fg_color=self.colors["primary"], corner_radius=8)
+            table_header.pack(fill="x", padx=20, pady=(0, 10))
+            
+            headers = ["Code", "Étudiant", "Type", "Université", "Date", "Statut", "Détails"]
+            header_widths = [120, 150, 100, 200, 120, 100, 80]
+            
+            header_row = ctk.CTkFrame(table_header, fg_color="transparent")
+            header_row.pack(fill="x", padx=10, pady=8)
+            
+            for header_text, width in zip(headers, header_widths):
+                ctk.CTkLabel(
+                    header_row,
+                    text=header_text,
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color=self.colors["text_white"],
+                    width=width
+                ).pack(side="left", padx=5)
+            
+            # Create table rows
+            for i, transfer in enumerate(history):
+                self._create_transfer_history_row(container, transfer, i)
+    
+    def _create_transfer_history_row(self, parent, transfer, index):
+        """Crée une ligne d'historique de transfert"""
+        bg_color = self.colors["card_bg"] if index % 2 == 0 else self.colors["hover"]
+        
+        row = ctk.CTkFrame(parent, fg_color=bg_color, corner_radius=8)
+        row.pack(fill="x", padx=20, pady=2)
+        
+        row_content = ctk.CTkFrame(row, fg_color="transparent")
+        row_content.pack(fill="x", padx=10, pady=8)
+        
+        # Data
+        transfer_code = transfer.get('transfer_code', 'N/A')[:15] + "..." if len(transfer.get('transfer_code', '')) > 15 else transfer.get('transfer_code', 'N/A')
+        student_name = f"{transfer.get('firstname', '')} {transfer.get('lastname', '')}".strip() or "N/A"
+        transfer_type = "📤 Sortant" if transfer.get('transfer_type') == 'OUTGOING' else "📥 Entrant"
+        university = transfer.get('destination_university', 'N/A') if transfer.get('transfer_type') == 'OUTGOING' else transfer.get('source_university', 'N/A')
+        transfer_date = transfer['transfer_date'].strftime('%d/%m/%Y') if transfer.get('transfer_date') else 'N/A'
+        
+        # Status color
+        status = transfer.get('status', 'N/A')
+        status_colors = {
+            'COMPLETED': self.colors['success'],
+            'PENDING': self.colors['warning'],
+            'IN_PROGRESS': self.colors['info'],
+            'REJECTED': self.colors['danger'],
+            'CANCELLED': self.colors['text_light']
+        }
+        status_color = status_colors.get(status, self.colors['text_light'])
+        
+        # Columns
+        widths = [120, 150, 100, 200, 120, 100, 80]
+        values = [transfer_code, student_name, transfer_type, university[:25], transfer_date]
+        
+        for value, width in zip(values, widths[:5]):
+            ctk.CTkLabel(
+                row_content,
+                text=value,
+                font=ctk.CTkFont(size=10),
+                text_color=self.colors["text_dark"],
+                width=width,
+                anchor="w"
+            ).pack(side="left", padx=5)
+        
+        # Status badge
+        status_frame = ctk.CTkFrame(row_content, fg_color=status_color, corner_radius=10, width=100)
+        status_frame.pack(side="left", padx=5)
+        
+        ctk.CTkLabel(
+            status_frame,
+            text=status,
+            font=ctk.CTkFont(size=9, weight="bold"),
+            text_color=self.colors["text_white"]
+        ).pack(padx=8, pady=3)
+        
+        # Details button
+        ctk.CTkButton(
+            row_content,
+            text="👁️",
+            fg_color=self.colors["info"],
+            hover_color="#0891b2",
+            text_color=self.colors["text_white"],
+            width=60,
+            height=28,
+            font=ctk.CTkFont(size=12),
+            command=lambda t=transfer: self._view_transfer_history_details(t)
+        ).pack(side="left", padx=5)
+    
+    # Helper methods for transfers
+    
+    def _get_all_students_for_transfer(self):
+        """Récupère tous les étudiants actifs"""
+        try:
+            return self.student_service.get_all_students()
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération des étudiants: {e}", exc_info=True)
+            return []
+    
+    def _get_partner_universities(self):
+        """Récupère les universités partenaires"""
+        try:
+            conn = self.transfer_service.db.get_connection()
+            cursor = conn.cursor(dictionary=True)
+            
+            query = """
+                SELECT * FROM partner_university 
+                WHERE is_active = TRUE 
+                ORDER BY university_name
+            """
+            cursor.execute(query)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération des universités: {e}", exc_info=True)
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                self.transfer_service.db.close_connection(conn)
+    
+    def _on_transfer_student_selected(self, value, students):
+        """Appelé quand un étudiant est sélectionné pour transfert"""
+        student_number = value.split(" - ")[0]
+        selected_student = next((s for s in students if s['student_number'] == student_number), None)
+        
+        if selected_student:
+            self._display_student_transfer_info(selected_student)
+    
+    def _display_student_transfer_info(self, student):
+        """Affiche les informations de l'étudiant sélectionné"""
+        # Clear previous content
+        for widget in self.transfer_student_info_frame.winfo_children():
+            widget.destroy()
+        
+        # Get academic summary
+        summary = self.transfer_service.get_student_academic_summary(student['id'])
+        
+        info_text = (
+            f"📋 Numéro: {student['student_number']}\n"
+            f"👤 Nom: {student['firstname']} {student['lastname']}\n"
+            f"📧 Email: {student.get('email', 'N/A')}\n"
+            f"📚 Cours: {summary.get('total_courses', 0)} | Crédits: {summary.get('total_credits', 0)} | "
+            f"Moyenne: {summary.get('average_grade', 0):.2f if summary.get('average_grade') else 'N/A'}\n"
+            f"📄 Documents: {summary.get('total_documents', 0)}"
+        )
+        
+        ctk.CTkLabel(
+            self.transfer_student_info_frame,
+            text=info_text,
+            font=ctk.CTkFont(size=11),
+            text_color=self.colors["text_dark"],
+            justify="left"
+        ).pack(padx=15, pady=12, anchor="w")
+    
+    def _generate_transfer_package(self, students, partners):
+        """Génère et enregistre le package de transfert"""
+        try:
+            # Get selected student
+            selected_value = self.transfer_student_combo.get()
+            if not selected_value or selected_value == "Aucun étudiant disponible":
+                messagebox.showwarning("Attention", "Veuillez sélectionner un étudiant")
+                return
+            
+            student_number = selected_value.split(" - ")[0]
+            selected_student = next((s for s in students if s['student_number'] == student_number), None)
+            
+            if not selected_student:
+                messagebox.showerror("Erreur", "Étudiant introuvable")
+                return
+            
+            # Get selected destination
+            dest_value = self.transfer_destination_combo.get()
+            if not dest_value or dest_value == "Aucune université partenaire":
+                messagebox.showwarning("Attention", "Veuillez sélectionner une université de destination")
+                return
+            
+            dest_code = dest_value.split("(")[1].split(")")[0]
+            selected_partner = next((p for p in partners if p['university_code'] == dest_code), None)
+            
+            if not selected_partner:
+                messagebox.showerror("Erreur", "Université introuvable")
+                return
+            
+            # Get options
+            include_docs = self.transfer_include_docs_var.get()
+            notes = self.transfer_notes_text.get("1.0", "end-1c").strip()
+            
+            # Initiate transfer
+            success, result = self.transfer_service.initiate_outgoing_transfer(
+                student_id=selected_student['id'],
+                destination_university=selected_partner['university_name'],
+                destination_code=selected_partner['university_code'],
+                initiated_by="Admin",  # TODO: Use actual logged-in user
+                include_documents=include_docs,
+                notes=notes if notes else None
+            )
+            
+            if success:
+                messagebox.showinfo(
+                    "Succès",
+                    f"Transfert créé avec succès!\n\n"
+                    f"Code de transfert: {result}\n\n"
+                    f"Les données ont été enregistrées et peuvent être "
+                    f"exportées vers l'université destinataire."
+                )
+                # Refresh the view
+                self._show_outgoing_transfers()
+            else:
+                messagebox.showerror(
+                    "Erreur",
+                    f"Impossible de créer le transfert:\n{result}"
+                )
+        
+        except Exception as e:
+            logger.error(f"Erreur lors de la génération du package: {e}", exc_info=True)
+            messagebox.showerror("Erreur", f"Une erreur s'est produite: {str(e)}")
+    
+    def _view_transfer_request_details(self, request):
+        """Affiche les détails d'une demande de transfert"""
+        # Create dialog
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(f"Détails - {request['request_code']}")
+        dialog.geometry("700x600")
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        # Scroll frame
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color=self.colors["card_bg"])
+        scroll.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Header
+        ctk.CTkLabel(
+            scroll,
+            text=f"Demande de Transfert - {request['request_code']}",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(pady=(0, 20))
+        
+        # Parse JSON data
+        import json
+        
+        try:
+            if request.get('received_data_json'):
+                transfer_data = json.loads(request['received_data_json'])
+                
+                # Display formatted data
+                json_display = json.dumps(transfer_data, indent=2, ensure_ascii=False)
+                
+                text_widget = ctk.CTkTextbox(scroll, height=400, font=ctk.CTkFont(size=10))
+                text_widget.pack(fill="both", expand=True, pady=10)
+                text_widget.insert("1.0", json_display)
+                text_widget.configure(state="disabled")
+        except Exception as e:
+            ctk.CTkLabel(
+                scroll,
+                text=f"Erreur lors du chargement des données: {e}",
+                text_color=self.colors["danger"]
+            ).pack(pady=20)
+        
+        # Close button
+        ctk.CTkButton(
+            scroll,
+            text="Fermer",
+            fg_color=self.colors["primary"],
+            command=dialog.destroy,
+            height=40
+        ).pack(pady=10, fill="x")
+    
+    def _approve_transfer_request(self, request):
+        """Approuve une demande de transfert entrante"""
+        # Create approval dialog
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Approuver le Transfert")
+        dialog.geometry("500x400")
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        frame = ctk.CTkFrame(dialog, fg_color=self.colors["card_bg"])
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ctk.CTkLabel(
+            frame,
+            text=f"✅ Approuver le Transfert",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(pady=(0, 20))
+        
+        ctk.CTkLabel(
+            frame,
+            text=f"Étudiant: {request['external_firstname']} {request['external_lastname']}\n"
+                 f"Source: {request['source_university']}",
+            font=ctk.CTkFont(size=12),
+            text_color=self.colors["text_dark"]
+        ).pack(pady=10)
+        
+        # Select promotion
+        ctk.CTkLabel(
+            frame,
+            text="Sélectionner la promotion de destination:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=20, pady=(10, 5))
+        
+        # Get promotions
+        promotions = self._get_all_promotions()
+        promo_options = [f"{p['name']} - {p['department_name']}" for p in promotions]
+        
+        promo_combo = ctk.CTkComboBox(
+            frame,
+            values=promo_options if promo_options else ["Aucune promotion"],
+            width=400,
+            height=35
+        )
+        promo_combo.pack(padx=20, pady=(0, 15))
+        if promo_options:
+            promo_combo.set(promo_options[0])
+        
+        # Notes
+        ctk.CTkLabel(
+            frame,
+            text="Notes d'approbation:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=20, pady=(10, 5))
+        
+        notes_text = ctk.CTkTextbox(frame, height=80, width=400)
+        notes_text.pack(padx=20, pady=(0, 20))
+        
+        # Buttons
+        button_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        button_frame.pack(fill="x", padx=20, pady=10)
+        
+        def do_approve():
+            selected_promo = promo_combo.get()
+            if not selected_promo or selected_promo == "Aucune promotion":
+                messagebox.showwarning("Attention", "Veuillez sélectionner une promotion")
+                return
+            
+            promo_name = selected_promo.split(" - ")[0]
+            selected_promotion = next((p for p in promotions if p['name'] == promo_name), None)
+            
+            if not selected_promotion:
+                messagebox.showerror("Erreur", "Promotion introuvable")
+                return
+            
+            approval_notes = notes_text.get("1.0", "end-1c").strip()
+            
+            # Approve
+            success, result = self.transfer_service.approve_incoming_transfer(
+                request_id=request['id'],
+                approved_by="Admin",  # TODO: Use actual logged-in user
+                target_promotion_id=selected_promotion['id'],
+                approval_notes=approval_notes if approval_notes else None
+            )
+            
+            if success:
+                messagebox.showinfo(
+                    "Succès",
+                    f"Transfert approuvé avec succès!\n\n"
+                    f"ID Étudiant créé: {result}\n\n"
+                    f"L'étudiant a été créé avec un mot de passe temporaire: ChangeMe123!"
+                )
+                dialog.destroy()
+                self._show_incoming_transfers()
+            else:
+                messagebox.showerror("Erreur", f"Impossible d'approuver le transfert:\n{result}")
+        
+        ctk.CTkButton(
+            button_frame,
+            text="✅ Approuver",
+            fg_color=self.colors["success"],
+            hover_color="#059669",
+            command=do_approve,
+            height=40
+        ).pack(side="left", padx=5, expand=True, fill="x")
+        
+        ctk.CTkButton(
+            button_frame,
+            text="Annuler",
+            fg_color=self.colors["text_light"],
+            hover_color="#64748b",
+            command=dialog.destroy,
+            height=40
+        ).pack(side="left", padx=5, expand=True, fill="x")
+    
+    def _reject_transfer_request(self, request):
+        """Rejette une demande de transfert"""
+        # Create rejection dialog
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Rejeter le Transfert")
+        dialog.geometry("500x300")
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        frame = ctk.CTkFrame(dialog, fg_color=self.colors["card_bg"])
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ctk.CTkLabel(
+            frame,
+            text="❌ Rejeter le Transfert",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(pady=(0, 20))
+        
+        ctk.CTkLabel(
+            frame,
+            text="Raison du rejet:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=20, pady=(10, 5))
+        
+        reason_text = ctk.CTkTextbox(frame, height=100, width=400)
+        reason_text.pack(padx=20, pady=(0, 20))
+        
+        # Buttons
+        button_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        button_frame.pack(fill="x", padx=20, pady=10)
+        
+        def do_reject():
+            reason = reason_text.get("1.0", "end-1c").strip()
+            if not reason:
+                messagebox.showwarning("Attention", "Veuillez indiquer la raison du rejet")
+                return
+            
+            success = self.transfer_service.reject_incoming_transfer(
+                request_id=request['id'],
+                rejected_by="Admin",  # TODO: Use actual logged-in user
+                rejection_reason=reason
+            )
+            
+            if success:
+                messagebox.showinfo("Succès", "Demande de transfert rejetée")
+                dialog.destroy()
+                self._show_incoming_transfers()
+            else:
+                messagebox.showerror("Erreur", "Impossible de rejeter la demande")
+        
+        ctk.CTkButton(
+            button_frame,
+            text="❌ Rejeter",
+            fg_color=self.colors["danger"],
+            hover_color="#dc2626",
+            command=do_reject,
+            height=40
+        ).pack(side="left", padx=5, expand=True, fill="x")
+        
+        ctk.CTkButton(
+            button_frame,
+            text="Annuler",
+            fg_color=self.colors["text_light"],
+            hover_color="#64748b",
+            command=dialog.destroy,
+            height=40
+        ).pack(side="left", padx=5, expand=True, fill="x")
+    
+    def _view_transfer_history_details(self, transfer):
+        """Affiche les détails d'un transfert dans l'historique"""
+        # Create dialog
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(f"Détails - {transfer['transfer_code']}")
+        dialog.geometry("700x600")
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color=self.colors["card_bg"])
+        scroll.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ctk.CTkLabel(
+            scroll,
+            text=f"Détails du Transfert - {transfer['transfer_code']}",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(pady=(0, 20))
+        
+        # Display transfer info
+        info_text = (
+            f"Type: {transfer['transfer_type']}\n"
+            f"Étudiant: {transfer.get('firstname', '')} {transfer.get('lastname', '')}\n"
+            f"Source: {transfer.get('source_university', 'N/A')}\n"
+            f"Destination: {transfer.get('destination_university', 'N/A')}\n"
+            f"Date: {transfer['transfer_date'].strftime('%d/%m/%Y %H:%M') if transfer.get('transfer_date') else 'N/A'}\n"
+            f"Statut: {transfer.get('status', 'N/A')}\n"
+            f"Notes transférées: {transfer.get('records_count', 0)}\n"
+            f"Documents transférés: {transfer.get('documents_count', 0)}\n"
+            f"Crédits totaux: {transfer.get('total_credits', 0)}\n"
+        )
+        
+        ctk.CTkLabel(
+            scroll,
+            text=info_text,
+            font=ctk.CTkFont(size=12),
+            text_color=self.colors["text_dark"],
+            justify="left"
+        ).pack(pady=10, anchor="w")
+        
+        # Close button
+        ctk.CTkButton(
+            scroll,
+            text="Fermer",
+            fg_color=self.colors["primary"],
+            command=dialog.destroy,
+            height=40
+        ).pack(pady=10, fill="x")
+    
+    def _get_all_promotions(self):
+        """Récupère toutes les promotions avec départements"""
+        try:
+            conn = self.transfer_service.db.get_connection()
+            cursor = conn.cursor(dictionary=True)
+            
+            query = """
+                SELECT p.id, p.name, d.name as department_name, f.name as faculty_name
+                FROM promotion p
+                LEFT JOIN department d ON p.department_id = d.id
+                LEFT JOIN faculty f ON d.faculty_id = f.id
+                WHERE p.is_active = TRUE
+                ORDER BY f.name, d.name, p.name
+            """
+            cursor.execute(query)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération des promotions: {e}", exc_info=True)
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                self.transfer_service.db.close_connection(conn)
     
     def _clear_content(self):
         """Efface le contenu"""

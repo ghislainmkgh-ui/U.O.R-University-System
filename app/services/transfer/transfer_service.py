@@ -12,9 +12,9 @@ from core.models.academic_record import AcademicRecord
 from core.models.student_document import StudentDocument
 from core.models.transfer_history import TransferHistory
 from core.models.transfer_request import TransferRequest
-from config.logger import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class TransferService:

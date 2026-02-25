@@ -11,9 +11,9 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 from app.services.transfer.transfer_service import TransferService
-from config.logger import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)

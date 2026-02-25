@@ -4890,7 +4890,7 @@ class AdminDashboard(ctk.CTkFrame):
     def _get_all_students_for_transfer(self):
         """Récupère tous les étudiants actifs"""
         try:
-            return self.student_service.get_all_students()
+            return self.student_service.get_all_students_with_finance()
         except Exception as e:
             logger.error(f"Erreur lors de la récupération des étudiants: {e}", exc_info=True)
             return []

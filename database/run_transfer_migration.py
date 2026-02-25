@@ -2,6 +2,9 @@
 import mysql.connector
 from pathlib import Path
 import sys
+import logging
+
+logger = logging.getLogger(__name__)
 
 def run_migration():
     """Exécute le script de migration SQL"""
@@ -24,30 +27,55 @@ def run_migration():
         with open(migration_file, 'r', encoding='utf-8') as f:
             sql_script = f.read()
         
-        # Séparer les commandes SQL
-        commands = [cmd.strip() for cmd in sql_script.split(';') if cmd.strip() and not cmd.strip().startswith('--')]
+        # Séparer les commandes SQL par `;` et exécuter
+        # Ignorer les commentaires et les lignes vides
+        commands = sql_script.split(';')
         
-        # Exécuter chaque commande
-        print(f"Exécution de {len(commands)} commandes SQL...")
+        executed = 0
+        skipped = 0
+        
         for i, command in enumerate(commands, 1):
-            if command and not command.isspace():
+            command = command.strip()
+            
+            # Passer les commentaires et les lignes vides
+            if not command or command.startswith('--') or command.startswith('#'):
+                skipped += 1
+                continue
+            
+            # Ignorer "COMMIT" s'il est seul
+            if command.lower() == 'commit':
                 try:
-                    # Skip les commentaires
-                    if command.strip().startswith('#') or command.strip().startswith('--'):
-                        continue
-                    
                     cursor.execute(command)
-                    print(f"  ✓ Commande {i}/{len(commands)} exécutée")
-                except mysql.connector.Error as e:
-                    # Ignorer les erreurs "table already exists"
-                    if "already exists" in str(e).lower():
-                        print(f"  ⚠ Commande {i}: Table existe déjà (ignoré)")
-                    else:
-                        print(f"  ✗ Erreur commande {i}: {e}")
-                        raise
+                    conn.commit()
+                    executed += 1
+                except Exception as e:
+                    if "no transaction" not in str(e).lower():
+                        print(f"  ⚠ Erreur sur COMMIT: {e}")
+                continue
+            
+            try:
+                # Ajouter le `;` si manquant
+                if not command.endswith(';'):
+                    command += ';'
+                
+                print(f"  ⏳ Exécution commande {i}...", end='')
+                cursor.execute(command)
+                print(f" ✓")
+                executed += 1
+            except mysql.connector.Error as e:
+                # Ignorer les erreurs "table already exists"
+                if "already exists" in str(e).lower():
+                    print(f" ℹ️ (existe déjà)")
+                    executed += 1
+                else:
+                    print(f" ✗")
+                    print(f"    Erreur: {e}")
+                    raise
         
         conn.commit()
-        print("\n✅ Migration exécutée avec succès!")
+        print(f"\n✅ Migration exécutée avec succès!")
+        print(f"   Commandes exécutées: {executed}")
+        print(f"   Lignes ignorées: {skipped}")
         print("\nTables créées:")
         print("  - academic_record (notes académiques)")
         print("  - student_document (documents et ouvrages)")

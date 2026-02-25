@@ -124,3 +124,17 @@ class DatabaseConnection:
         if self._connection_pool:
             self._connection_pool._reset_connections()
             logger.info("All connections closed")
+    
+    def close_connection(self, connection):
+        """
+        Ferme une connexion
+        
+        Args:
+            connection: Connexion à fermer
+        """
+        try:
+            if connection and connection.is_connected():
+                connection.close()
+        except Error as e:
+            logger.error(f"Error closing connection: {e}")
+

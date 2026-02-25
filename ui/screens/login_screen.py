@@ -137,16 +137,16 @@ class LoginScreen(ctk.CTkFrame):
 
         # Title
         ctk.CTkLabel(
-            content, text="USER LOGIN", font=ctk.CTkFont(size=14, weight="bold"), text_color="#cfeff2"
+            content, text="CONNEXION UTILISATEUR", font=ctk.CTkFont(size=14, weight="bold"), text_color="#cfeff2"
         ).pack(pady=(0, 4))
 
         # Subtitle
         ctk.CTkLabel(
-            content, text="U.O.R Access Control System", font=ctk.CTkFont(size=9), text_color="#a6dbe1"
+            content, text="Syst\u00e8me de Contr\u00f4le d'Acc\u00e8s de l'U.O.R", font=ctk.CTkFont(size=9), text_color="#a6dbe1"
         ).pack(pady=(0, 12))
 
         # Email label
-        ctk.CTkLabel(content, text="Email ID", font=ctk.CTkFont(size=10), text_color="#bde3ea").pack(anchor="w")
+        ctk.CTkLabel(content, text="Identifiant Email", font=ctk.CTkFont(size=10), text_color="#bde3ea").pack(anchor="w")
 
         # Email input
         self.entry_username = ctk.CTkEntry(
@@ -165,7 +165,7 @@ class LoginScreen(ctk.CTkFrame):
         self.entry_username.insert(0, "admin")
 
         # Password label
-        ctk.CTkLabel(content, text="Password", font=ctk.CTkFont(size=10), text_color="#bde3ea").pack(anchor="w")
+        ctk.CTkLabel(content, text="Mot de passe", font=ctk.CTkFont(size=10), text_color="#bde3ea").pack(anchor="w")
 
         # Password input
         self.entry_password = ctk.CTkEntry(
@@ -190,7 +190,7 @@ class LoginScreen(ctk.CTkFrame):
 
         ctk.CTkCheckBox(
             opts,
-            text="Remember me",
+            text="Se souvenir de moi",
             checkbox_height=12,
             checkbox_width=12,
             font=ctk.CTkFont(size=8),
@@ -202,7 +202,7 @@ class LoginScreen(ctk.CTkFrame):
 
         ctk.CTkLabel(
             opts,
-            text="Forgot Password?",
+            text="Mot de passe oubli\u00e9?",
             font=ctk.CTkFont(size=8, weight="bold"),
             text_color="#cfeff2",
             cursor="hand2",
@@ -217,7 +217,7 @@ class LoginScreen(ctk.CTkFrame):
         # LOGIN BUTTON
         self.login_btn = ctk.CTkButton(
             content,
-            text="LOGIN",
+            text="CONNEXION",
             height=32,
             font=ctk.CTkFont(size=10, weight="bold"),
             fg_color="#0a2230",
@@ -282,7 +282,7 @@ class LoginScreen(ctk.CTkFrame):
         password = self.entry_password.get().strip()
 
         if not username or not password:
-            self.status_label.configure(text="Please enter credentials")
+            self.status_label.configure(text="Veuillez entrer vos identifiants")
             return
 
         # Désactiver le bouton login
@@ -312,7 +312,7 @@ class LoginScreen(ctk.CTkFrame):
                 # Charger le dashboard en arrière-plan
                 def load_dashboard():
                     try:
-                        progress.set_progress(30, "Initialisation interface...")
+                        progress.set_progress(30, "Initialisation de l'interface...")
                         
                         dashboard = AdminDashboard(
                             parent=parent_frame,
@@ -320,7 +320,7 @@ class LoginScreen(ctk.CTkFrame):
                             theme=self.theme
                         )
                         
-                        progress.set_progress(70, "Chargement données...")
+                        progress.set_progress(70, "Chargement des données...")
                         
                         # Attendre que le dashboard soit rendu
                         parent_frame.update_idletasks()
@@ -350,13 +350,13 @@ class LoginScreen(ctk.CTkFrame):
                 thread = threading.Thread(target=load_dashboard, daemon=True)
                 thread.start()
             else:
-                self.status_label.configure(text="Login failed")
+                self.status_label.configure(text="Connexion échouée")
                 self.dashboard_open = False
                 if login_btn:
                     login_btn.configure(state="normal")
         except Exception as e:
             logger.error(f"Login error: {e}")
-            self.status_label.configure(text=f"Error: {str(e)}")
+            self.status_label.configure(text=f"Erreur: {str(e)}")
             self.dashboard_open = False
             if login_btn:
                 login_btn.configure(state="normal")

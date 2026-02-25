@@ -65,7 +65,7 @@ class TransferService:
                     "source_university_code": self.university_code,
                     "transfer_date": datetime.now().isoformat(),
                     "format_version": "1.0",
-                    "certification": "Certified by U.O.R Academic Office"
+                    "certification": "Certifié par le Bureau Académique de l'U.O.R"
                 },
                 "student_info": student_data,
                 "academic_records": {

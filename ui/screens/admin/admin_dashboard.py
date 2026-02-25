@@ -479,7 +479,7 @@ class AdminDashboard(ctk.CTkFrame):
         
         self.logo_subtitle_label = ctk.CTkLabel(
             logo_frame,
-            text="ADMIN DASHBOARD",
+            text="TABLEAU DE BORD ADMIN",
             font=ctk.CTkFont(size=11),
             text_color=self.colors["text_light"]
         )
@@ -492,7 +492,8 @@ class AdminDashboard(ctk.CTkFrame):
         nav_items = [
             ("📊", "dashboard", self._t("dashboard", "Dashboard"), lambda: self._run_with_loading(self._show_dashboard)),
             ("👥", "students", self._t("students", "Étudiants"), lambda: self._run_with_loading(self._show_students)),
-            ("💰", "finance", self._t("finance", "Finances"), lambda: self._run_with_loading(self._show_finance)),
+            ("�", "academic_data", "Données Académiques", lambda: self._run_with_loading(self._show_student_academic_data)),
+            ("�💰", "finance", self._t("finance", "Finances"), lambda: self._run_with_loading(self._show_finance)),
             ("📚", "academic_years", self._t("academic_years", "Années Acad."), lambda: self._run_with_loading(self._show_academic_years)),
             ("�", "transfers", self._t("transfers", "Transferts"), lambda: self._run_with_loading(self._show_transfers)),
             ("�📋", "access_logs", self._t("access_logs", "Logs d'Accès"), lambda: self._run_with_loading(self._show_access_logs)),
@@ -4416,6 +4417,705 @@ class AdminDashboard(ctk.CTkFrame):
         except (ValueError, TypeError):
             messagebox.showerror("Erreur", "Veuillez entrer des montants valides (nombres)")
     
+    # ==================== STUDENT ACADEMIC DATA ====================
+    
+    def _show_student_academic_data(self):
+        """Affiche l'interface de gestion des données académiques des étudiants"""
+        self.current_view = "academic_data"
+        self._set_main_scrollbar_visible(True)
+        self._update_nav_buttons("academic_data")
+        self.title_label.configure(text="📝 Gestion des Données Académiques")
+        self._clear_content()
+        
+        # Container
+        container = ctk.CTkScrollableFrame(
+            self.content_frame,
+            fg_color="transparent",
+            scrollbar_button_color=self.colors["border"]
+        )
+        container.pack(fill="both", expand=True, padx=0, pady=0)
+        
+        # Header section
+        header_frame = ctk.CTkFrame(container, fg_color=self.colors["primary"], corner_radius=0)
+        header_frame.pack(fill="x", padx=0, pady=0)
+        
+        ctk.CTkLabel(
+            header_frame,
+            text="📚 Ajouter les Données Académiques par Étudiant",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=self.colors["text_white"]
+        ).pack(anchor="w", padx=20, pady=(15, 5))
+        
+        ctk.CTkLabel(
+            header_frame,
+            text="Gestion des notes, documents et certificats pour chaque étudiant",
+            font=ctk.CTkFont(size=11),
+            text_color="#e8f4ff"
+        ).pack(anchor="w", padx=20, pady=(0, 15))
+        
+        # Content frame
+        content = ctk.CTkFrame(container, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Two columns layout
+        left_column = ctk.CTkFrame(content, fg_color="transparent")
+        left_column.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        
+        # Student selection section
+        selection_card = ctk.CTkFrame(left_column, fg_color=self.colors["card_bg"], corner_radius=12)
+        selection_card.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            selection_card,
+            text="1️⃣ Sélectionner un Étudiant",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=15, pady=(15, 10))
+        
+        # Get students
+        students = self._get_all_students_for_transfer()
+        student_options = [f"{s['student_number']} - {s['firstname']} {s['lastname']}" for s in students]
+        self.academic_students_list = students
+        
+        self.academic_student_combo = ctk.CTkComboBox(
+            selection_card,
+            values=student_options if student_options else ["Aucun étudiant disponible"],
+            width=300,
+            height=40,
+            font=ctk.CTkFont(size=12),
+            command=self._on_academic_student_selected
+        )
+        self.academic_student_combo.pack(anchor="w", padx=15, pady=(0, 15))
+        if student_options:
+            self.academic_student_combo.set(student_options[0])
+        
+        # Student info display
+        self.academic_info_frame = ctk.CTkFrame(left_column, fg_color=self.colors["hover"], corner_radius=10)
+        self.academic_info_frame.pack(fill="x", pady=(0, 15))
+        
+        if students:
+            self._display_academic_student_info(students[0])
+        
+        # Right column - Forms
+        right_column = ctk.CTkFrame(content, fg_color="transparent")
+        right_column.pack(side="right", fill="both", expand=True, padx=(10, 0))
+        
+        # Tabs for different data types
+        ctk.CTkLabel(
+            right_column,
+            text="2️⃣ Ajouter les Données",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 10))
+        
+        tabs_frame = ctk.CTkFrame(right_column, fg_color=self.colors["card_bg"], corner_radius=12)
+        tabs_frame.pack(fill="both", expand=True)
+        
+        # Tab buttons
+        tab_btn_frame = ctk.CTkFrame(tabs_frame, fg_color="transparent")
+        tab_btn_frame.pack(fill="x", padx=15, pady=(15, 0))
+        
+        self.academic_active_tab = "grades"
+        self.academic_tab_buttons = []
+        
+        tab_configs = [
+            ("grades", "📊 Ajouter une Note"),
+            ("documents", "📄 Ajouter un Document"),
+        ]
+        
+        for tab_key, tab_label in tab_configs:
+            btn = ctk.CTkButton(
+                tab_btn_frame,
+                text=tab_label,
+                fg_color=self.colors["primary"] if tab_key == "grades" else "transparent",
+                hover_color=self.colors["primary"],
+                text_color=self.colors["text_white"] if tab_key == "grades" else self.colors["text_dark"],
+                height=40,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                command=lambda k=tab_key: self._switch_academic_tab(k, tabs_frame)
+            )
+            btn.pack(side="left", padx=3, expand=True, fill="x")
+            self.academic_tab_buttons.append({"button": btn, "key": tab_key})
+        
+        # Tab content container
+        self.academic_tab_content = ctk.CTkFrame(tabs_frame, fg_color="transparent")
+        self.academic_tab_content.pack(fill="both", expand=True, padx=15, pady=15)
+        
+        # Show initial tab
+        self._show_academic_grades_form()
+    
+    def _on_academic_student_selected(self, value):
+        """Appelé quand un étudiant est sélectionné"""
+        if not value or value == "Aucun étudiant disponible":
+            return
+        
+        student_number = value.split(" - ")[0]
+        selected_student = next(
+            (s for s in self.academic_students_list if s['student_number'] == student_number),
+            None
+        )
+        
+        if selected_student:
+            self._display_academic_student_info(selected_student)
+    
+    def _display_academic_student_info(self, student):
+        """Affiche les info de l'étudiant sélectionné"""
+        try:
+            for widget in self.academic_info_frame.winfo_children():
+                widget.destroy()
+            
+            info_frame = ctk.CTkFrame(self.academic_info_frame, fg_color="transparent")
+            info_frame.pack(fill="x", padx=15, pady=12)
+            
+            ctk.CTkLabel(
+                info_frame,
+                text=f"👤 {student['firstname']} {student['lastname']}",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=self.colors["primary"]
+            ).pack(anchor="w", pady=2)
+            
+            ctk.CTkLabel(
+                info_frame,
+                text=f"ID: {student['student_number']} | {student.get('promotion_name', 'N/A')}",
+                font=ctk.CTkFont(size=10),
+                text_color=self.colors["text_dark"]
+            ).pack(anchor="w", pady=2)
+        except Exception as e:
+            logger.error(f"Erreur affichage info étudiant académique: {e}")
+    
+    def _switch_academic_tab(self, tab_key, parent):
+        """Change d'onglet dans les données académiques"""
+        self.academic_active_tab = tab_key
+        
+        # Update button colors
+        for tab_btn in self.academic_tab_buttons:
+            if tab_btn["key"] == tab_key:
+                tab_btn["button"].configure(
+                    fg_color=self.colors["primary"],
+                    text_color=self.colors["text_white"]
+                )
+            else:
+                tab_btn["button"].configure(
+                    fg_color="transparent",
+                    text_color=self.colors["text_dark"]
+                )
+        
+        # Clear content
+        for widget in self.academic_tab_content.winfo_children():
+            widget.destroy()
+        
+        # Show new tab content
+        if tab_key == "grades":
+            self._show_academic_grades_form()
+        elif tab_key == "documents":
+            self._show_academic_documents_form()
+    
+    def _show_academic_grades_form(self):
+        """Affiche le formulaire pour ajouter une note"""
+        form = ctk.CTkFrame(self.academic_tab_content, fg_color="transparent")
+        form.pack(fill="both", expand=True)
+        
+        # Course name
+        ctk.CTkLabel(
+            form,
+            text="Nom du Cours *",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(10, 5))
+        
+        course_entry = ctk.CTkEntry(
+            form,
+            placeholder_text="Ex: Programmation Python, Algorithmes...",
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        course_entry.pack(fill="x", pady=(0, 15))
+        
+        # Code and Credits row
+        row1 = ctk.CTkFrame(form, fg_color="transparent")
+        row1.pack(fill="x", pady=(0, 15))
+        
+        col1 = ctk.CTkFrame(row1, fg_color="transparent")
+        col1.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        
+        ctk.CTkLabel(
+            col1,
+            text="Code du Cours",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        code_entry = ctk.CTkEntry(
+            col1,
+            placeholder_text="Ex: PRG101",
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        code_entry.pack(fill="both")
+        
+        col2 = ctk.CTkFrame(row1, fg_color="transparent")
+        col2.pack(side="right", fill="both", expand=True, padx=(10, 0))
+        
+        ctk.CTkLabel(
+            col2,
+            text="Crédits ECTS",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        credits_entry = ctk.CTkEntry(
+            col2,
+            placeholder_text="Ex: 3, 4...",
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        credits_entry.pack(fill="both")
+        
+        # Grade row
+        row2 = ctk.CTkFrame(form, fg_color="transparent")
+        row2.pack(fill="x", pady=(0, 15))
+        
+        col1 = ctk.CTkFrame(row2, fg_color="transparent")
+        col1.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        
+        ctk.CTkLabel(
+            col1,
+            text="Note (sur 20) *",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        grade_entry = ctk.CTkEntry(
+            col1,
+            placeholder_text="Ex: 15.5",
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        grade_entry.pack(fill="both")
+        
+        col2 = ctk.CTkFrame(row2, fg_color="transparent")
+        col2.pack(side="right", fill="both", expand=True, padx=(10, 0))
+        
+        ctk.CTkLabel(
+            col2,
+            text="Statut",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        status_combo = ctk.CTkComboBox(
+            col2,
+            values=["RÉUSSI", "ÉCHOUÉ", "EN COURS"],
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        status_combo.pack(fill="both")
+        status_combo.set("RÉUSSI")
+        
+        # Semester and Date row
+        row3 = ctk.CTkFrame(form, fg_color="transparent")
+        row3.pack(fill="x", pady=(0, 15))
+        
+        col1 = ctk.CTkFrame(row3, fg_color="transparent")
+        col1.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        
+        ctk.CTkLabel(
+            col1,
+            text="Semestre",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        semester_combo = ctk.CTkComboBox(
+            col1,
+            values=["1", "2", "Annuel"],
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        semester_combo.pack(fill="both")
+        semester_combo.set("Annuel")
+        
+        col2 = ctk.CTkFrame(row3, fg_color="transparent")
+        col2.pack(side="right", fill="both", expand=True, padx=(10, 0))
+        
+        ctk.CTkLabel(
+            col2,
+            text="Date d'Examen",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        date_entry = ctk.CTkEntry(
+            col2,
+            placeholder_text="YYYY-MM-DD",
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        date_entry.pack(fill="both")
+        
+        # Professeur
+        ctk.CTkLabel(
+            form,
+            text="Professeur",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(10, 5))
+        
+        professor_entry = ctk.CTkEntry(
+            form,
+            placeholder_text="Nom du professeur",
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        professor_entry.pack(fill="x", pady=(0, 20))
+        
+        # Buttons
+        btn_frame = ctk.CTkFrame(form, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=10)
+        
+        ctk.CTkButton(
+            btn_frame,
+            text="✅ Ajouter la Note",
+            fg_color=self.colors["success"],
+            hover_color="#059669",
+            height=45,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=lambda: self._add_academic_grade(course_entry, code_entry, credits_entry, grade_entry, status_combo, semester_combo, date_entry, professor_entry)
+        ).pack(side="left", padx=5, expand=True, fill="x")
+        
+        ctk.CTkButton(
+            btn_frame,
+            text="🔄 Réinitialiser",
+            fg_color="#6b7280",
+            hover_color="#4b5563",
+            height=45,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=lambda: [
+                course_entry.delete(0, "end"),
+                code_entry.delete(0, "end"),
+                credits_entry.delete(0, "end"),
+                grade_entry.delete(0, "end"),
+                date_entry.delete(0, "end"),
+                professor_entry.delete(0, "end")
+            ]
+        ).pack(side="left", padx=5, expand=True, fill="x")
+    
+    def _show_academic_documents_form(self):
+        """Affiche le formulaire pour ajouter un document"""
+        form = ctk.CTkFrame(self.academic_tab_content, fg_color="transparent")
+        form.pack(fill="both", expand=True)
+        
+        # Document type
+        ctk.CTkLabel(
+            form,
+            text="Type de Document *",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(10, 5))
+        
+        doc_type_combo = ctk.CTkComboBox(
+            form,
+            values=["LIVRE", "THÈSE", "RAPPORT", "CERTIFICAT", "DIPLÔME", "AUTRE"],
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        doc_type_combo.pack(fill="x", pady=(0, 15))
+        doc_type_combo.set("CERTIFICAT")
+        
+        # Title
+        ctk.CTkLabel(
+            form,
+            text="Titre du Document *",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(10, 5))
+        
+        title_entry = ctk.CTkEntry(
+            form,
+            placeholder_text="Ex: Certificat de Complétion, Thèse...",
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        title_entry.pack(fill="x", pady=(0, 15))
+        
+        # Category and Author
+        row1 = ctk.CTkFrame(form, fg_color="transparent")
+        row1.pack(fill="x", pady=(0, 15))
+        
+        col1 = ctk.CTkFrame(row1, fg_color="transparent")
+        col1.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        
+        ctk.CTkLabel(
+            col1,
+            text="Catégorie",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        category_entry = ctk.CTkEntry(
+            col1,
+            placeholder_text="Ex: Sciences, Littérature",
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        category_entry.pack(fill="both")
+        
+        col2 = ctk.CTkFrame(row1, fg_color="transparent")
+        col2.pack(side="right", fill="both", expand=True, padx=(10, 0))
+        
+        ctk.CTkLabel(
+            col2,
+            text="Auteur",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        author_entry = ctk.CTkEntry(
+            col2,
+            placeholder_text="Nom de l'auteur",
+            height=40,
+            font=ctk.CTkFont(size=11)
+        )
+        author_entry.pack(fill="both")
+        
+        # Description
+        ctk.CTkLabel(
+            form,
+            text="Description",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(10, 5))
+        
+        description_text = ctk.CTkTextbox(
+            form,
+            height=80,
+            font=ctk.CTkFont(size=11)
+        )
+        description_text.pack(fill="both", pady=(0, 20))
+        
+        # Buttons
+        btn_frame = ctk.CTkFrame(form, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=10)
+        
+        ctk.CTkButton(
+            btn_frame,
+            text="✅ Ajouter le Document",
+            fg_color=self.colors["success"],
+            hover_color="#059669",
+            height=45,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=lambda: self._add_academic_document(doc_type_combo, title_entry, category_entry, author_entry, description_text)
+        ).pack(side="left", padx=5, expand=True, fill="x")
+        
+        ctk.CTkButton(
+            btn_frame,
+            text="🔄 Réinitialiser",
+            fg_color="#6b7280",
+            hover_color="#4b5563",
+            height=45,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=lambda: [
+                title_entry.delete(0, "end"),
+                category_entry.delete(0, "end"),
+                author_entry.delete(0, "end"),
+                description_text.delete("1.0", "end")
+            ]
+        ).pack(side="left", padx=5, expand=True, fill="x")
+    
+    def _add_academic_grade(self, course_entry, code_entry, credits_entry, grade_entry, status_combo, semester_combo, date_entry, professor_entry):
+        """Ajoute une note académique pour l'étudiant sélectionné"""
+        try:
+            # Get selected student
+            student_value = self.academic_student_combo.get()
+            if not student_value or student_value == "Aucun étudiant disponible":
+                messagebox.showwarning("Attention", "Veuillez sélectionner un étudiant")
+                return
+            
+            student_number = student_value.split(" - ")[0]
+            student = next((s for s in self.academic_students_list if s['student_number'] == student_number), None)
+            
+            if not student:
+                messagebox.showerror("Erreur", "Étudiant introuvable")
+                return
+            
+            # Validate input
+            course_name = course_entry.get().strip()
+            grade_str = grade_entry.get().strip()
+            
+            if not course_name:
+                messagebox.showwarning("Attention", "Veuillez entrer le nom du cours")
+                return
+            
+            if not grade_str:
+                messagebox.showwarning("Attention", "Veuillez entrer la note")
+                return
+            
+            # Convert values
+            try:
+                grade = float(grade_str)
+                credits = int(credits_entry.get()) if credits_entry.get() else 0
+            except ValueError:
+                messagebox.showerror("Erreur", "Note et crédits doivent être des nombres")
+                return
+            
+            if grade < 0 or grade > 20:
+                messagebox.showwarning("Attention", "La note doit être entre 0 et 20")
+                return
+            
+            # Insert into database
+            from core.database.connection import DatabaseConnection
+            conn = DatabaseConnection()
+            
+            query = """
+                INSERT INTO academic_record 
+                (student_id, promotion_id, course_name, course_code, credits, grade, grade_letter, 
+                 semester, exam_date, professor_name, status, remarks)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            
+            grade_letter = self._get_grade_letter(grade)
+            exam_date = date_entry.get() if date_entry.get() else None
+            
+            conn.execute_update(query, (
+                student['id'],
+                student['promotion_id'],
+                course_name,
+                code_entry.get() or None,
+                credits,
+                grade,
+                grade_letter,
+                self._map_semester_to_db(semester_combo.get()),
+                exam_date,
+                professor_entry.get() or None,
+                self._map_status_to_db(status_combo.get()),
+                None
+            ))
+            
+            messagebox.showinfo(
+                "Succès",
+                f"✅ Note ajoutée avec succès pour {course_name}!\n\n"
+                f"Étudiant: {student['firstname']} {student['lastname']}\n"
+                f"Note: {grade}/20 ({grade_letter})"
+            )
+            
+            # Clear fields
+            course_entry.delete(0, "end")
+            code_entry.delete(0, "end")
+            credits_entry.delete(0, "end")
+            grade_entry.delete(0, "end")
+            date_entry.delete(0, "end")
+            professor_entry.delete(0, "end")
+            
+        except Exception as e:
+            logger.error(f"Erreur ajout note académique: {e}", exc_info=True)
+            messagebox.showerror("Erreur", f"Une erreur s'est produite: {str(e)}")
+    
+    def _add_academic_document(self, doc_type_combo, title_entry, category_entry, author_entry, description_text):
+        """Ajoute un document académique pour l'étudiant sélectionné"""
+        try:
+            # Get selected student
+            student_value = self.academic_student_combo.get()
+            if not student_value or student_value == "Aucun étudiant disponible":
+                messagebox.showwarning("Attention", "Veuillez sélectionner un étudiant")
+                return
+            
+            student_number = student_value.split(" - ")[0]
+            student = next((s for s in self.academic_students_list if s['student_number'] == student_number), None)
+            
+            if not student:
+                messagebox.showerror("Erreur", "Étudiant introuvable")
+                return
+            
+            # Validate input
+            title = title_entry.get().strip()
+            doc_type = doc_type_combo.get()
+            
+            if not title:
+                messagebox.showwarning("Attention", "Veuillez entrer le titre du document")
+                return
+            
+            # Insert into database
+            from core.database.connection import DatabaseConnection
+            conn = DatabaseConnection()
+            
+            query = """
+                INSERT INTO student_document 
+                (student_id, document_type, title, description, author, category)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """
+            
+            description = description_text.get("1.0", "end-1c").strip()
+            
+            conn.execute_update(query, (
+                student['id'],
+                self._map_doc_type_to_db(doc_type),
+                title,
+                description or None,
+                author_entry.get() or None,
+                category_entry.get() or None
+            ))
+            
+            messagebox.showinfo(
+                "Succès",
+                f"✅ Document ajouté avec succès!\n\n"
+                f"Étudiant: {student['firstname']} {student['lastname']}\n"
+                f"Type: {doc_type}\n"
+                f"Titre: {title}"
+            )
+            
+            # Clear fields
+            title_entry.delete(0, "end")
+            category_entry.delete(0, "end")
+            author_entry.delete(0, "end")
+            description_text.delete("1.0", "end")
+            
+        except Exception as e:
+            logger.error(f"Erreur ajout document académique: {e}", exc_info=True)
+            messagebox.showerror("Erreur", f"Une erreur s'est produite: {str(e)}")
+    
+    def _get_grade_letter(self, grade):
+        """Convertit une note numérique en lettre"""
+        if grade >= 18:
+            return "A"
+        elif grade >= 16:
+            return "B"
+        elif grade >= 14:
+            return "C"
+        elif grade >= 12:
+            return "D"
+        else:
+            return "F"
+    
+    def _map_status_to_db(self, status_fr):
+        """Convertit le statut français en anglais pour la base de données"""
+        mapping = {
+            "RÉUSSI": "PASSED",
+            "ÉCHOUÉ": "FAILED",
+            "EN COURS": "IN_PROGRESS"
+        }
+        return mapping.get(status_fr, "PASSED")
+    
+    def _map_semester_to_db(self, semester_fr):
+        """Convertit le semestre français en anglais pour la base de données"""
+        mapping = {
+            "Annuel": "Annual",
+            "1": "1",
+            "2": "2"
+        }
+        return mapping.get(semester_fr, "Annual")
+    
+    def _map_doc_type_to_db(self, doc_type_fr):
+        """Convertit le type de document français en anglais pour la base de données"""
+        mapping = {
+            "LIVRE": "BOOK",
+            "THÈSE": "THESIS",
+            "RAPPORT": "REPORT",
+            "CERTIFICAT": "CERTIFICATE",
+            "DIPLÔME": "DIPLOMA",
+            "AUTRE": "OTHER"
+        }
+        return mapping.get(doc_type_fr, "OTHER")
+    
     # ==================== TRANSFERS VIEW ====================
     
     def _show_transfers(self):
@@ -4487,10 +5187,11 @@ class AdminDashboard(ctk.CTkFrame):
                     text_color=self.colors["text_dark"]
                 )
         
-        # Clear and show new content
+        # Clear ALL content FIRST before showing new tab
         for widget in self.transfer_tab_content.winfo_children():
             widget.destroy()
         
+        # Now show new content
         callback()
     
     def _show_outgoing_transfers(self):
@@ -4542,13 +5243,16 @@ class AdminDashboard(ctk.CTkFrame):
         students = self._get_all_students_for_transfer()
         student_options = [f"{s['student_number']} - {s['firstname']} {s['lastname']}" for s in students]
         
+        # Store students for later use
+        self.transfer_available_students = students
+        
         self.transfer_student_combo = ctk.CTkComboBox(
             form_frame,
             values=student_options if student_options else ["Aucun étudiant disponible"],
             width=400,
             height=35,
             font=ctk.CTkFont(size=12),
-            command=lambda value: self._on_transfer_student_selected(value, students)
+            command=self._on_transfer_student_combo_changed
         )
         self.transfer_student_combo.pack(anchor="w", pady=(0, 15))
         if student_options:
@@ -4623,7 +5327,7 @@ class AdminDashboard(ctk.CTkFrame):
             text_color=self.colors["text_white"],
             height=45,
             font=ctk.CTkFont(size=13, weight="bold"),
-            command=lambda: self._generate_transfer_package(students, partners)
+            command=self._generate_transfer_package_action
         ).pack(side="left", padx=5)
         
         ctk.CTkButton(
@@ -4917,6 +5621,23 @@ class AdminDashboard(ctk.CTkFrame):
             if conn:
                 self.transfer_service.db.close_connection(conn)
     
+    def _on_transfer_student_combo_changed(self, value):
+        """Appelé quand la sélection du combo étudiant change"""
+        try:
+            if not value or value == "Aucun étudiant disponible":
+                return
+            
+            student_number = value.split(" - ")[0]
+            selected_student = next(
+                (s for s in self.transfer_available_students if s['student_number'] == student_number),
+                None
+            )
+            
+            if selected_student:
+                self._display_student_transfer_info(selected_student)
+        except Exception as e:
+            logger.error(f"Erreur changement combo étudiant: {e}", exc_info=True)
+    
     def _on_transfer_student_selected(self, value, students):
         """Appelé quand un étudiant est sélectionné pour transfert"""
         student_number = value.split(" - ")[0]
@@ -4926,30 +5647,172 @@ class AdminDashboard(ctk.CTkFrame):
             self._display_student_transfer_info(selected_student)
     
     def _display_student_transfer_info(self, student):
-        """Affiche les informations de l'étudiant sélectionné"""
-        # Clear previous content
-        for widget in self.transfer_student_info_frame.winfo_children():
-            widget.destroy()
+        """Affiche les informations détaillées de l'étudiant sélectionné"""
+        try:
+            # Clear previous content
+            for widget in self.transfer_student_info_frame.winfo_children():
+                widget.destroy()
+            
+            # Get academic summary
+            summary = self.transfer_service.get_student_academic_summary(student['id'])
+            
+            # Header with student info
+            header_frame = ctk.CTkFrame(self.transfer_student_info_frame, fg_color="transparent")
+            header_frame.pack(fill="x", padx=15, pady=(12, 8))
+            
+            student_name = f"{student['firstname']} {student['lastname']}"
+            ctk.CTkLabel(
+                header_frame,
+                text=f"📋 {student_name}",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=self.colors["primary"]
+            ).pack(anchor="w")
+            
+            # Academic data
+            data_frame = ctk.CTkFrame(self.transfer_student_info_frame, fg_color="transparent")
+            data_frame.pack(fill="x", padx=15, pady=(0, 12))
+            
+            # Row 1: Number and Email
+            row1 = ctk.CTkFrame(data_frame, fg_color="transparent")
+            row1.pack(fill="x", pady=3)
+            
+            ctk.CTkLabel(
+                row1,
+                text=f"Numéro: {student['student_number']}",
+                font=ctk.CTkFont(size=10),
+                text_color=self.colors["text_dark"]
+            ).pack(side="left", padx=(0, 20))
+            
+            ctk.CTkLabel(
+                row1,
+                text=f"Promotion: {student.get('promotion_name', 'N/A')}",
+                font=ctk.CTkFont(size=10),
+                text_color=self.colors["text_dark"]
+            ).pack(side="left")
+            
+            # Row 2: Courses and Credits
+            row2 = ctk.CTkFrame(data_frame, fg_color="transparent")
+            row2.pack(fill="x", pady=3)
+            
+            courses = summary.get('total_courses', 0) or 0
+            credits = summary.get('total_credits', 0) or 0
+            average = summary.get('average_grade', 0)
+            
+            ctk.CTkLabel(
+                row2,
+                text=f"📚 Cours: {courses}",
+                font=ctk.CTkFont(size=10),
+                text_color=self.colors["text_dark"]
+            ).pack(side="left", padx=(0, 20))
+            
+            ctk.CTkLabel(
+                row2,
+                text=f"⭐ Crédits: {credits}",
+                font=ctk.CTkFont(size=10),
+                text_color=self.colors["text_dark"]
+            ).pack(side="left", padx=(0, 20))
+            
+            avg_text = f"{float(average):.2f}" if average else "N/A"
+            ctk.CTkLabel(
+                row2,
+                text=f"📊 Moyenne: {avg_text}",
+                font=ctk.CTkFont(size=10),
+                text_color=self.colors["text_dark"]
+            ).pack(side="left")
+            
+            # Row 3: Documents
+            docs = summary.get('total_documents', 0) or 0
+            row3 = ctk.CTkFrame(data_frame, fg_color="transparent")
+            row3.pack(fill="x", pady=3)
+            
+            ctk.CTkLabel(
+                row3,
+                text=f"📄 Documents: {docs}",
+                font=ctk.CTkFont(size=10),
+                text_color=self.colors["text_dark"]
+            ).pack(side="left")
+            
+        except Exception as e:
+            logger.error(f"Erreur affichage info étudiant: {e}", exc_info=True)
+            ctk.CTkLabel(
+                self.transfer_student_info_frame,
+                text="❌ Erreur lors de l'affichage des informations",
+                font=ctk.CTkFont(size=11),
+                text_color="#ef4444"
+            ).pack(padx=15, pady=12)
+    
+    def _generate_transfer_package_action(self):
+        """Génère et enregistre le package de transfert"""
+        try:
+            # Get selected student
+            selected_value = self.transfer_student_combo.get()
+            if not selected_value or selected_value == "Aucun étudiant disponible":
+                messagebox.showwarning("Attention", "Veuillez sélectionner un étudiant")
+                return
+            
+            student_number = selected_value.split(" - ")[0]
+            selected_student = next(
+                (s for s in self.transfer_available_students if s['student_number'] == student_number),
+                None
+            )
+            
+            if not selected_student:
+                messagebox.showerror("Erreur", "Étudiant introuvable")
+                return
+            
+            # Get selected destination
+            dest_value = self.transfer_destination_combo.get()
+            if not dest_value or dest_value == "Aucune université partenaire":
+                messagebox.showwarning("Attention", "Veuillez sélectionner une université de destination")
+                return
+            
+            try:
+                dest_code = dest_value.split("(")[1].split(")")[0]
+            except:
+                messagebox.showerror("Erreur", "Format université invalide")
+                return
+            
+            # Get partner universities fresh
+            partners = self._get_partner_universities()
+            selected_partner = next((p for p in partners if p['university_code'] == dest_code), None)
+            
+            if not selected_partner:
+                messagebox.showerror("Erreur", "Université introuvable")
+                return
+            
+            # Get options
+            include_docs = self.transfer_include_docs_var.get()
+            notes = self.transfer_notes_text.get("1.0", "end-1c").strip()
+            
+            # Initiate transfer
+            success, result = self.transfer_service.initiate_outgoing_transfer(
+                student_id=selected_student['id'],
+                destination_university=selected_partner['university_name'],
+                destination_code=selected_partner['university_code'],
+                initiated_by="Admin",
+                include_documents=include_docs,
+                notes=notes if notes else None
+            )
+            
+            if success:
+                messagebox.showinfo(
+                    "Succès",
+                    f"Transfert créé avec succès!\n\n"
+                    f"Code de transfert: {result}\n\n"
+                    f"Les données ont été enregistrées et peuvent être "
+                    f"exportées vers l'université destinataire."
+                )
+                # Refresh the view
+                self._show_outgoing_transfers()
+            else:
+                messagebox.showerror(
+                    "Erreur",
+                    f"Impossible de créer le transfert:\n{result}"
+                )
         
-        # Get academic summary
-        summary = self.transfer_service.get_student_academic_summary(student['id'])
-        
-        info_text = (
-            f"📋 Numéro: {student['student_number']}\n"
-            f"👤 Nom: {student['firstname']} {student['lastname']}\n"
-            f"📧 Email: {student.get('email', 'N/A')}\n"
-            f"📚 Cours: {summary.get('total_courses', 0)} | Crédits: {summary.get('total_credits', 0)} | "
-            f"Moyenne: {summary.get('average_grade', 0):.2f if summary.get('average_grade') else 'N/A'}\n"
-            f"📄 Documents: {summary.get('total_documents', 0)}"
-        )
-        
-        ctk.CTkLabel(
-            self.transfer_student_info_frame,
-            text=info_text,
-            font=ctk.CTkFont(size=11),
-            text_color=self.colors["text_dark"],
-            justify="left"
-        ).pack(padx=15, pady=12, anchor="w")
+        except Exception as e:
+            logger.error(f"Erreur lors de la génération du package: {e}", exc_info=True)
+            messagebox.showerror("Erreur", f"Une erreur s'est produite: {str(e)}")
     
     def _generate_transfer_package(self, students, partners):
         """Génère et enregistre le package de transfert"""

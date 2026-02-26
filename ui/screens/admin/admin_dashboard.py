@@ -1,3 +1,4 @@
+import requests
 """Dashboard administrateur moderne - Style SB Admin Pro"""
 import customtkinter as ctk
 import logging
@@ -4420,12 +4421,22 @@ class AdminDashboard(ctk.CTkFrame):
     # ==================== STUDENT ACADEMIC DATA ====================
     
     def _show_student_academic_data(self):
-        """Affiche l'interface de gestion des données académiques des étudiants"""
+        """Affiche l'interface de gestion des données académiques avec sélection hiérarchique"""
         self.current_view = "academic_data"
         self._set_main_scrollbar_visible(True)
         self._update_nav_buttons("academic_data")
         self.title_label.configure(text="📝 Gestion des Données Académiques")
         self._clear_content()
+        
+        # Initialiser les variables de sélection
+        if not hasattr(self, 'academic_state'):
+            self.academic_state = {
+                'faculty_id': None,
+                'department_id': None,
+                'promotion_id': None,
+                'selected_student': None,
+                'filtered_students': []
+            }
         
         # Container
         container = ctk.CTkScrollableFrame(
@@ -4457,11 +4468,11 @@ class AdminDashboard(ctk.CTkFrame):
         content = ctk.CTkFrame(container, fg_color="transparent")
         content.pack(fill="both", expand=True, padx=20, pady=20)
         
-        # Two columns layout
+        # ==== LEFT COLUMN: Selection & Student Info ====
         left_column = ctk.CTkFrame(content, fg_color="transparent")
         left_column.pack(side="left", fill="both", expand=True, padx=(0, 10))
         
-        # Student selection section
+        # ---- CARD 1: Sélection Hiérarchique ----
         selection_card = ctk.CTkFrame(left_column, fg_color=self.colors["card_bg"], corner_radius=12)
         selection_card.pack(fill="x", pady=(0, 15))
         
@@ -4472,31 +4483,142 @@ class AdminDashboard(ctk.CTkFrame):
             text_color=self.colors["text_dark"]
         ).pack(anchor="w", padx=15, pady=(15, 10))
         
-        # Get students
-        students = self._get_all_students_for_transfer()
-        student_options = [f"{s['student_number']} - {s['firstname']} {s['lastname']}" for s in students]
-        self.academic_students_list = students
+        # Sous-section: Hierarchie
+        hierarchy_frame = ctk.CTkFrame(selection_card, fg_color="transparent")
+        hierarchy_frame.pack(fill="x", padx=15, pady=(0, 15))
         
-        self.academic_student_combo = ctk.CTkComboBox(
-            selection_card,
-            values=student_options if student_options else ["Aucun étudiant disponible"],
-            width=300,
-            height=40,
-            font=ctk.CTkFont(size=12),
-            command=self._on_academic_student_selected
+        # FACULTÉ
+        ctk.CTkLabel(
+            hierarchy_frame,
+            text="Faculté *",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        faculty_options = self._get_academic_faculties()
+        faculty_names = [f['name'] for f in faculty_options]
+        
+        self.academic_faculty_combo = ctk.CTkComboBox(
+            hierarchy_frame,
+            values=faculty_names if faculty_names else ["Aucune faculté"],
+            height=36,
+            font=ctk.CTkFont(size=10),
+            command=self._on_academic_faculty_selected
         )
-        self.academic_student_combo.pack(anchor="w", padx=15, pady=(0, 15))
-        if student_options:
-            self.academic_student_combo.set(student_options[0])
+        self.academic_faculty_combo.pack(fill="x", pady=(0, 12))
+        if faculty_names:
+            self.academic_faculty_combo.set(faculty_names[0])
+            self.academic_state['faculty_id'] = next((f['id'] for f in faculty_options if f['name'] == faculty_names[0]), None)
         
-        # Student info display
-        self.academic_info_frame = ctk.CTkFrame(left_column, fg_color=self.colors["hover"], corner_radius=10)
-        self.academic_info_frame.pack(fill="x", pady=(0, 15))
+        # DÉPARTEMENT
+        ctk.CTkLabel(
+            hierarchy_frame,
+            text="Département *",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
         
-        if students:
-            self._display_academic_student_info(students[0])
+        self.academic_dept_combo = ctk.CTkComboBox(
+            hierarchy_frame,
+            values=["Sélectionnez une faculté d'abord"],
+            height=36,
+            font=ctk.CTkFont(size=10),
+            command=self._on_academic_department_selected
+        )
+        self.academic_dept_combo.pack(fill="x", pady=(0, 12))
         
-        # Right column - Forms
+        # PROMOTION
+        ctk.CTkLabel(
+            hierarchy_frame,
+            text="Promotion *",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        self.academic_promotion_combo = ctk.CTkComboBox(
+            hierarchy_frame,
+            values=["Sélectionnez un département d'abord"],
+            height=36,
+            font=ctk.CTkFont(size=10),
+            command=self._on_academic_promotion_selected
+        )
+        self.academic_promotion_combo.pack(fill="x", pady=(0, 12))
+        
+        # RECHERCHE ÉTUDIANT
+        ctk.CTkLabel(
+            hierarchy_frame,
+            text="Rechercher un Étudiant",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        self.academic_search_entry = ctk.CTkEntry(
+            hierarchy_frame,
+            placeholder_text="Nom, prénom ou numéro d'étudiant...",
+            height=36,
+            font=ctk.CTkFont(size=10)
+        )
+        self.academic_search_entry.pack(fill="x", pady=(0, 12))
+        self.academic_search_entry.bind("<KeyRelease>", self._on_academic_search_changed)
+        
+        # ---- CARD 2: Liste des Étudiants ----
+        students_list_card = ctk.CTkFrame(left_column, fg_color=self.colors["card_bg"], corner_radius=12)
+        students_list_card.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            students_list_card,
+            text="📋 Étudiants de la Promotion",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=15, pady=(10, 8))
+        
+        # Scrollable list
+        self.academic_students_scroll = ctk.CTkScrollableFrame(
+            students_list_card,
+            fg_color=self.colors["hover"],
+            corner_radius=8,
+            scrollbar_button_color=self.colors["border"],
+            width=300,
+            height=120
+        )
+        self.academic_students_scroll.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        
+        # ---- CARD 3: Infos de l'étudiant sélectionné ----
+        info_card = ctk.CTkFrame(left_column, fg_color=self.colors["hover"], corner_radius=12)
+        info_card.pack(fill="x", pady=(0, 15))
+        
+        self.academic_info_frame = ctk.CTkFrame(info_card, fg_color="transparent")
+        self.academic_info_frame.pack(fill="x", padx=15, pady=15)
+        
+        ctk.CTkLabel(
+            self.academic_info_frame,
+            text="Aucun étudiant sélectionné",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_light"]
+        ).pack(anchor="w")
+        
+        # ---- CARD 4: Données Académiques Ajoutées ----
+        self.academic_data_card = ctk.CTkFrame(left_column, fg_color=self.colors["card_bg"], corner_radius=12)
+        self.academic_data_card.pack(fill="x", pady=(0, 0))
+        
+        ctk.CTkLabel(
+            self.academic_data_card,
+            text="📊 Données Académiques Existantes",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=15, pady=(12, 8))
+        
+        self.academic_display_frame = ctk.CTkFrame(self.academic_data_card, fg_color="transparent")
+        self.academic_display_frame.pack(fill="both", expand=True, padx=15, pady=(0, 12))
+        
+        ctk.CTkLabel(
+            self.academic_display_frame,
+            text="Les données s'afficheront ici...",
+            font=ctk.CTkFont(size=10),
+            text_color=self.colors["text_light"]
+        ).pack(pady=10)
+        
+        # ==== RIGHT COLUMN: Forms ====
         right_column = ctk.CTkFrame(content, fg_color="transparent")
         right_column.pack(side="right", fill="both", expand=True, padx=(10, 0))
         
@@ -4543,6 +4665,360 @@ class AdminDashboard(ctk.CTkFrame):
         
         # Show initial tab
         self._show_academic_grades_form()
+    
+    # ========== MÉTHODES DE CHARGEMENT HIÉRARCHIQUE ==========
+    
+    def _get_academic_faculties(self):
+        """Récupère les facultés actives"""
+        try:
+            return self.student_service.get_faculties()
+        except Exception as e:
+            logger.error(f"Erreur chargement facultés: {e}")
+            return []
+    
+    def _on_academic_faculty_selected(self, faculty_name):
+        """Callback lors de la sélection d'une faculté"""
+        try:
+            faculties = self._get_academic_faculties()
+            faculty = next((f for f in faculties if f['name'] == faculty_name), None)
+            
+            if not faculty:
+                return
+            
+            self.academic_state['faculty_id'] = faculty['id']
+            self.academic_state['department_id'] = None
+            self.academic_state['promotion_id'] = None
+            self.academic_state['selected_student'] = None
+            self.academic_state['filtered_students'] = []
+            
+            # Charger départements
+            departments = self.student_service.get_departments_by_faculty(faculty['id'])
+            dept_names = [d['name'] for d in departments]
+            
+            if dept_names:
+                self.academic_dept_combo.configure(values=dept_names)
+                self.academic_dept_combo.set(dept_names[0])
+                self._on_academic_department_selected(dept_names[0])
+            else:
+                self.academic_dept_combo.configure(values=["Aucun département"])
+                self.academic_dept_combo.set("Aucun département")
+                self.academic_promotion_combo.configure(values=["Aucune promotion"])
+                self._clear_academic_students_list()
+        except Exception as e:
+            logger.error(f"Erreur sélection faculté: {e}")
+    
+    def _on_academic_department_selected(self, dept_name):
+        """Callback lors de la sélection d'un département"""
+        try:
+            if not self.academic_state['faculty_id'] or dept_name == "Aucun département":
+                return
+            
+            faculties = self._get_academic_faculties()
+            faculty = next((f for f in faculties if f['id'] == self.academic_state['faculty_id']), None)
+            
+            if not faculty:
+                return
+            
+            departments = self.student_service.get_departments_by_faculty(faculty['id'])
+            dept = next((d for d in departments if d['name'] == dept_name), None)
+            
+            if not dept:
+                return
+            
+            self.academic_state['department_id'] = dept['id']
+            self.academic_state['promotion_id'] = None
+            self.academic_state['selected_student'] = None
+            self.academic_state['filtered_students'] = []
+            
+            # Charger promotions
+            promotions = self.student_service.get_promotions_by_department(dept['id'])
+            promo_names = [f"{p['name']} ({p['year']})" for p in promotions]
+            
+            if promo_names:
+                self.academic_promotion_combo.configure(values=promo_names)
+                self.academic_promotion_combo.set(promo_names[0])
+                self._on_academic_promotion_selected(promo_names[0])
+            else:
+                self.academic_promotion_combo.configure(values=["Aucune promotion"])
+                self.academic_promotion_combo.set("Aucune promotion")
+                self._clear_academic_students_list()
+        except Exception as e:
+            logger.error(f"Erreur sélection département: {e}")
+    
+    def _on_academic_promotion_selected(self, promo_name):
+        """Callback lors de la sélection d'une promotion"""
+        try:
+            if not self.academic_state['department_id'] or promo_name == "Aucune promotion":
+                self._clear_academic_students_list()
+                return
+            
+            departments = self.student_service.get_departments_by_faculty(self.academic_state['faculty_id'])
+            dept = next((d for d in departments if d['id'] == self.academic_state['department_id']), None)
+            
+            if not dept:
+                return
+            
+            promotions = self.student_service.get_promotions_by_department(dept['id'])
+            promo = next((p for p in promotions if f"{p['name']} ({p['year']})" == promo_name), None)
+            
+            if not promo:
+                return
+            
+            self.academic_state['promotion_id'] = promo['id']
+            self.academic_state['selected_student'] = None
+            
+            # Charger les étudiants de cette promotion
+            self._update_academic_students_list()
+        except Exception as e:
+            logger.error(f"Erreur sélection promotion: {e}")
+    
+    def _update_academic_students_list(self):
+        """Met à jour la liste des étudiants de la promotion"""
+        try:
+            students = self._get_academic_students_by_promotion()
+            self.academic_state['filtered_students'] = students
+            
+            # Vider la liste
+            self._clear_academic_students_list()
+            
+            # Remplir avec les nouveaux étudiants
+            if students:
+                for student in students:
+                    self._create_academic_student_button(student)
+            else:
+                ctk.CTkLabel(
+                    self.academic_students_scroll,
+                    text="Aucun étudiant",
+                    font=ctk.CTkFont(size=10),
+                    text_color=self.colors["text_light"]
+                ).pack(pady=20)
+        except Exception as e:
+            logger.error(f"Erreur mise à jour liste étudiants: {e}")
+    
+    def _get_academic_students_by_promotion(self, search_text=""):
+        """Récupère les étudiants de la promotion active"""
+        try:
+            if not self.academic_state['promotion_id']:
+                return []
+            
+            from core.database.connection import DatabaseConnection
+            conn = DatabaseConnection()
+            
+            query = """
+                SELECT s.id, s.student_number, s.firstname, s.lastname, 
+                       s.email, s.promotion_id, p.name as promotion_name
+                FROM student s
+                JOIN promotion p ON s.promotion_id = p.id
+                WHERE s.promotion_id = %s AND s.is_active = 1
+                ORDER BY s.lastname, s.firstname
+            """
+            
+            students = conn.execute_query(query, (self.academic_state['promotion_id'],))
+            
+            # Filtrer par recherche si nécessaire
+            if search_text.strip():
+                search_lower = search_text.lower().strip()
+                students = [s for s in students if (
+                    search_lower in f"{s['firstname']} {s['lastname']}".lower() or
+                    search_lower in s['student_number'].lower() or
+                    search_lower in (s.get('email', '') or '').lower()
+                )]
+            
+            return students
+        except Exception as e:
+            logger.error(f"Erreur récupération étudiants: {e}")
+            return []
+    
+    def _on_academic_search_changed(self, event=None):
+        """Callback lors de la saisie de recherche"""
+        try:
+            search_text = self.academic_search_entry.get()
+            students = self._get_academic_students_by_promotion(search_text)
+            self.academic_state['filtered_students'] = students
+            
+            # Vider et remplir la liste
+            self._clear_academic_students_list()
+            
+            if students:
+                for student in students:
+                    self._create_academic_student_button(student)
+            else:
+                ctk.CTkLabel(
+                    self.academic_students_scroll,
+                    text="Aucun étudiant trouvé",
+                    font=ctk.CTkFont(size=10),
+                    text_color=self.colors["text_light"]
+                ).pack(pady=20)
+        except Exception as e:
+            logger.error(f"Erreur recherche étudiant: {e}")
+    
+    def _create_academic_student_button(self, student):
+        """Crée un bouton pour afficher un étudiant"""
+        try:
+            scrollable_frame = getattr(self.academic_students_scroll, "_scrollable_frame", self.academic_students_scroll)
+            
+            btn_frame = ctk.CTkButton(
+                scrollable_frame,
+                text=f"{student['student_number']} - {student['firstname']} {student['lastname']}",
+                fg_color=self.colors["hover"],
+                hover_color=self.colors["primary"],
+                text_color=self.colors["text_dark"],
+                height=32,
+                font=ctk.CTkFont(size=10),
+                command=lambda s=student: self._select_academic_student(s),
+                anchor="w"
+            )
+            btn_frame.pack(fill="x", padx=5, pady=2)
+        except Exception as e:
+            logger.error(f"Erreur création bouton étudiant: {e}")
+    
+    def _clear_academic_students_list(self):
+        """Vide la liste des étudiants"""
+        try:
+            scrollable_frame = getattr(self.academic_students_scroll, "_scrollable_frame", self.academic_students_scroll)
+            for widget in scrollable_frame.winfo_children():
+                widget.destroy()
+        except Exception as e:
+            logger.error(f"Erreur nettoyage liste: {e}")
+    
+    def _select_academic_student(self, student):
+        """Sélectionne un étudiant et affiche ses infos"""
+        try:
+            self.academic_state['selected_student'] = student
+            self._display_academic_student_info(student)
+        except Exception as e:
+            logger.error(f"Erreur sélection étudiant: {e}")
+    
+    def _display_academic_student_info(self, student):
+        """Affiche les infos élargis de l'étudiant avec les données académiques"""
+        try:
+            # Vider le frame d'infos
+            for widget in self.academic_info_frame.winfo_children():
+                widget.destroy()
+            
+            info_frame = ctk.CTkFrame(self.academic_info_frame, fg_color="transparent")
+            info_frame.pack(fill="x", padx=0, pady=0)
+            
+            # Infos de base
+            ctk.CTkLabel(
+                info_frame,
+                text=f"👤 {student['firstname']} {student['lastname']}",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=self.colors["primary"]
+            ).pack(anchor="w", pady=(0, 3))
+            
+            ctk.CTkLabel(
+                info_frame,
+                text=f"ID: {student['student_number']} | Email: {student.get('email', 'N/A')}",
+                font=ctk.CTkFont(size=9),
+                text_color=self.colors["text_dark"]
+            ).pack(anchor="w", pady=(0, 8))
+            
+            # Afficher les données académiques en bas
+            self._display_academic_data_for_student(student)
+        except Exception as e:
+            logger.error(f"Erreur affichage info étudiant: {e}")
+    
+    def _display_academic_data_for_student(self, student):
+        """Affiche les notes et documents existants de l'étudiant"""
+        try:
+            # Vider le frame
+            for widget in self.academic_display_frame.winfo_children():
+                widget.destroy()
+            
+            from core.database.connection import DatabaseConnection
+            conn = DatabaseConnection()
+            
+            # Récupérer les notes (augmenté à 10 pour plus de contexte)
+            grades_query = """
+                SELECT * FROM academic_record 
+                WHERE student_id = %s 
+                ORDER BY exam_date DESC, id DESC LIMIT 10
+            """
+            grades = conn.execute_query(grades_query, (student['id'],))
+            
+            # Récupérer les documents (augmenté à 10)
+            docs_query = """
+                SELECT * FROM student_document 
+                WHERE student_id = %s 
+                ORDER BY id DESC LIMIT 10
+            """
+            documents = conn.execute_query(docs_query, (student['id'],))
+            
+            if not grades and not documents:
+                empty_label = ctk.CTkLabel(
+                    self.academic_display_frame,
+                    text="Aucune donnée académique",
+                    font=ctk.CTkFont(size=10),
+                    text_color=self.colors["text_light"]
+                )
+                empty_label.pack(pady=10)
+                self.academic_display_frame.update_idletasks()
+                return
+            
+            # Afficher les notes
+            if grades:
+                grades_header = ctk.CTkLabel(
+                    self.academic_display_frame,
+                    text="📊 Dernières Notes",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color=self.colors["primary"]
+                )
+                grades_header.pack(anchor="w", pady=(0, 5))
+                
+                for grade in grades:
+                    grade_text = (
+                        f"• {grade.get('course_name', 'N/A')} - "
+                        f"{grade.get('grade', 'N/A')}/20 ({grade.get('grade_letter', 'N/A')}) "
+                        f"| {grade.get('status', 'N/A')}"
+                    )
+                    grade_label = ctk.CTkLabel(
+                        self.academic_display_frame,
+                        text=grade_text,
+                        font=ctk.CTkFont(size=9),
+                        text_color=self.colors["text_dark"],
+                        anchor="w",
+                        justify="left"
+                    )
+                    grade_label.pack(anchor="w", pady=1, padx=5)
+            
+            # Espace entre sections
+            if grades and documents:
+                spacer = ctk.CTkLabel(
+                    self.academic_display_frame,
+                    text="",
+                    font=ctk.CTkFont(size=6)
+                )
+                spacer.pack(pady=3)
+            
+            # Afficher les documents
+            if documents:
+                docs_header = ctk.CTkLabel(
+                    self.academic_display_frame,
+                    text="📄 Documents",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color=self.colors["primary"]
+                )
+                docs_header.pack(anchor="w", pady=(5, 5) if grades else (0, 5))
+                
+                for doc in documents:
+                    doc_text = f"• {doc.get('document_type', 'N/A')} - {doc.get('title', 'N/A')}"
+                    doc_label = ctk.CTkLabel(
+                        self.academic_display_frame,
+                        text=doc_text,
+                        font=ctk.CTkFont(size=9),
+                        text_color=self.colors["text_dark"],
+                        anchor="w",
+                        justify="left"
+                    )
+                    doc_label.pack(anchor="w", pady=1, padx=5)
+            
+            # Forcer la mise à jour de l'affichage
+            self.academic_display_frame.update_idletasks()
+            self.academic_data_card.update_idletasks()
+            
+        except Exception as e:
+            logger.error(f"Erreur affichage données académiques: {e}", exc_info=True)
     
     def _on_academic_student_selected(self, value):
         """Appelé quand un étudiant est sélectionné"""
@@ -4925,20 +5401,14 @@ class AdminDashboard(ctk.CTkFrame):
     def _add_academic_grade(self, course_entry, code_entry, credits_entry, grade_entry, status_combo, semester_combo, date_entry, professor_entry):
         """Ajoute une note académique pour l'étudiant sélectionné"""
         try:
-            # Get selected student
-            student_value = self.academic_student_combo.get()
-            if not student_value or student_value == "Aucun étudiant disponible":
-                messagebox.showwarning("Attention", "Veuillez sélectionner un étudiant")
+            # Vérifier si un étudiant est sélectionné
+            if not self.academic_state['selected_student']:
+                messagebox.showwarning("Attention", "Veuillez sélectionner un étudiant dans la liste")
                 return
             
-            student_number = student_value.split(" - ")[0]
-            student = next((s for s in self.academic_students_list if s['student_number'] == student_number), None)
+            student = self.academic_state['selected_student']
             
-            if not student:
-                messagebox.showerror("Erreur", "Étudiant introuvable")
-                return
-            
-            # Validate input
+            # Valider les entrées
             course_name = course_entry.get().strip()
             grade_str = grade_entry.get().strip()
             
@@ -4950,7 +5420,7 @@ class AdminDashboard(ctk.CTkFrame):
                 messagebox.showwarning("Attention", "Veuillez entrer la note")
                 return
             
-            # Convert values
+            # Convertir les valeurs
             try:
                 grade = float(grade_str)
                 credits = int(credits_entry.get()) if credits_entry.get() else 0
@@ -4962,7 +5432,7 @@ class AdminDashboard(ctk.CTkFrame):
                 messagebox.showwarning("Attention", "La note doit être entre 0 et 20")
                 return
             
-            # Insert into database
+            # Insérer dans la base de données
             from core.database.connection import DatabaseConnection
             conn = DatabaseConnection()
             
@@ -4991,6 +5461,14 @@ class AdminDashboard(ctk.CTkFrame):
                 None
             ))
             
+            # Effacer les champs AVANT le message (pour que l'utilisateur les voie se vider)
+            course_entry.delete(0, "end")
+            code_entry.delete(0, "end")
+            credits_entry.delete(0, "end")
+            grade_entry.delete(0, "end")
+            date_entry.delete(0, "end")
+            professor_entry.delete(0, "end")
+            
             messagebox.showinfo(
                 "Succès",
                 f"✅ Note ajoutée avec succès pour {course_name}!\n\n"
@@ -4998,13 +5476,9 @@ class AdminDashboard(ctk.CTkFrame):
                 f"Note: {grade}/20 ({grade_letter})"
             )
             
-            # Clear fields
-            course_entry.delete(0, "end")
-            code_entry.delete(0, "end")
-            credits_entry.delete(0, "end")
-            grade_entry.delete(0, "end")
-            date_entry.delete(0, "end")
-            professor_entry.delete(0, "end")
+            # Mettre à jour l'affichage des données APRÈS le message
+            # Cela donne un meilleur retour utilisateur
+            self._display_academic_data_for_student(student)
             
         except Exception as e:
             logger.error(f"Erreur ajout note académique: {e}", exc_info=True)
@@ -5013,20 +5487,14 @@ class AdminDashboard(ctk.CTkFrame):
     def _add_academic_document(self, doc_type_combo, title_entry, category_entry, author_entry, description_text):
         """Ajoute un document académique pour l'étudiant sélectionné"""
         try:
-            # Get selected student
-            student_value = self.academic_student_combo.get()
-            if not student_value or student_value == "Aucun étudiant disponible":
-                messagebox.showwarning("Attention", "Veuillez sélectionner un étudiant")
+            # Vérifier si un étudiant est sélectionné
+            if not self.academic_state['selected_student']:
+                messagebox.showwarning("Attention", "Veuillez sélectionner un étudiant dans la liste")
                 return
             
-            student_number = student_value.split(" - ")[0]
-            student = next((s for s in self.academic_students_list if s['student_number'] == student_number), None)
+            student = self.academic_state['selected_student']
             
-            if not student:
-                messagebox.showerror("Erreur", "Étudiant introuvable")
-                return
-            
-            # Validate input
+            # Valider les entrées
             title = title_entry.get().strip()
             doc_type = doc_type_combo.get()
             
@@ -5034,7 +5502,7 @@ class AdminDashboard(ctk.CTkFrame):
                 messagebox.showwarning("Attention", "Veuillez entrer le titre du document")
                 return
             
-            # Insert into database
+            # Insérer dans la base de données
             from core.database.connection import DatabaseConnection
             conn = DatabaseConnection()
             
@@ -5055,6 +5523,12 @@ class AdminDashboard(ctk.CTkFrame):
                 category_entry.get() or None
             ))
             
+            # Effacer les champs AVANT le message
+            title_entry.delete(0, "end")
+            category_entry.delete(0, "end")
+            author_entry.delete(0, "end")
+            description_text.delete("1.0", "end")
+            
             messagebox.showinfo(
                 "Succès",
                 f"✅ Document ajouté avec succès!\n\n"
@@ -5063,11 +5537,8 @@ class AdminDashboard(ctk.CTkFrame):
                 f"Titre: {title}"
             )
             
-            # Clear fields
-            title_entry.delete(0, "end")
-            category_entry.delete(0, "end")
-            author_entry.delete(0, "end")
-            description_text.delete("1.0", "end")
+            # Mettre à jour l'affichage des données APRÈS le message
+            self._display_academic_data_for_student(student)
             
         except Exception as e:
             logger.error(f"Erreur ajout document académique: {e}", exc_info=True)
@@ -5195,7 +5666,17 @@ class AdminDashboard(ctk.CTkFrame):
         callback()
     
     def _show_outgoing_transfers(self):
-        """Affiche l'interface pour initier un transfert sortant"""
+        """Affiche l'interface pour initier un transfert sortant avec sélection en cascade"""
+        # Initialize transfer state if not exists
+        if not hasattr(self, 'transfer_state'):
+            self.transfer_state = {
+                'faculty_id': None,
+                'department_id': None,
+                'promotion_id': None,
+                'selected_student': None,
+                'filtered_students': []
+            }
+        
         container = ctk.CTkScrollableFrame(
             self.transfer_tab_content,
             fg_color=self.colors["card_bg"],
@@ -5221,125 +5702,530 @@ class AdminDashboard(ctk.CTkFrame):
         ctk.CTkLabel(
             info_card,
             text="ℹ️  Transférez les données académiques d'un étudiant vers une autre université.\n"
-                 "Les données de paiement ne sont jamais transférées pour des raisons de confidentialité.",
+                 "Sélection : Faculté → Département → Promotion → Étudiant",
             font=ctk.CTkFont(size=11),
             text_color=self.colors["text_white"],
             justify="left"
         ).pack(padx=15, pady=12)
         
-        # Form
-        form_frame = ctk.CTkFrame(container, fg_color="transparent")
-        form_frame.pack(fill="x", padx=20, pady=10)
+        # Main content in two columns
+        main_content = ctk.CTkFrame(container, fg_color="transparent")
+        main_content.pack(fill="both", expand=True, padx=20, pady=10)
         
-        # Student selection
+        # LEFT COLUMN - Selection and Student List
+        left_column = ctk.CTkFrame(main_content, fg_color="transparent")
+        left_column.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        
+        # Card 1: Faculty, Department, Promotion Selection
+        selection_card = ctk.CTkFrame(left_column, fg_color=self.colors["hover"], corner_radius=10)
+        selection_card.pack(fill="x", pady=(0, 15))
+        
         ctk.CTkLabel(
-            form_frame,
-            text="Sélectionner l'étudiant :",
+            selection_card,
+            text="📍 Sélection Hiérarchique",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=self.colors["text_dark"]
-        ).pack(anchor="w", pady=(10, 5))
+        ).pack(anchor="w", padx=15, pady=(15, 10))
         
-        # Get all students
-        students = self._get_all_students_for_transfer()
-        student_options = [f"{s['student_number']} - {s['firstname']} {s['lastname']}" for s in students]
+        # Faculty selection
+        ctk.CTkLabel(
+            selection_card,
+            text="Faculté :",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=15)
         
-        # Store students for later use
-        self.transfer_available_students = students
+        faculties = self._get_transfer_faculties()
+        faculty_names = [f['name'] for f in faculties]
         
-        self.transfer_student_combo = ctk.CTkComboBox(
-            form_frame,
-            values=student_options if student_options else ["Aucun étudiant disponible"],
-            width=400,
-            height=35,
-            font=ctk.CTkFont(size=12),
-            command=self._on_transfer_student_combo_changed
+        self.transfer_faculty_combo = ctk.CTkComboBox(
+            selection_card,
+            values=faculty_names if faculty_names else ["Aucune faculté"],
+            width=300,
+            height=32,
+            font=ctk.CTkFont(size=11),
+            command=self._on_transfer_faculty_selected
         )
-        self.transfer_student_combo.pack(anchor="w", pady=(0, 15))
-        if student_options:
-            self.transfer_student_combo.set(student_options[0])
+        self.transfer_faculty_combo.pack(anchor="w", padx=15, pady=(0, 10))
         
-        # Student info display
-        self.transfer_student_info_frame = ctk.CTkFrame(form_frame, fg_color=self.colors["hover"], corner_radius=10)
-        self.transfer_student_info_frame.pack(fill="x", pady=(0, 20))
-        
-        # Initialize with first student
-        if students:
-            self._display_student_transfer_info(students[0])
-        
-        # Destination university
+        # Department selection
         ctk.CTkLabel(
-            form_frame,
-            text="Université de destination :",
+            selection_card,
+            text="Département :",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=15)
+        
+        self.transfer_dept_combo = ctk.CTkComboBox(
+            selection_card,
+            values=["Sélectionner une faculté d'abord"],
+            width=300,
+            height=32,
+            font=ctk.CTkFont(size=11),
+            command=self._on_transfer_department_selected
+        )
+        self.transfer_dept_combo.pack(anchor="w", padx=15, pady=(0, 10))
+        
+        # Promotion selection
+        ctk.CTkLabel(
+            selection_card,
+            text="Promotion :",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=15)
+        
+        self.transfer_promotion_combo = ctk.CTkComboBox(
+            selection_card,
+            values=["Sélectionner un département d'abord"],
+            width=300,
+            height=32,
+            font=ctk.CTkFont(size=11),
+            command=self._on_transfer_promotion_selected
+        )
+        self.transfer_promotion_combo.pack(anchor="w", padx=15, pady=(0, 15))
+        
+        # Card 2: Student List with Search
+        students_card = ctk.CTkFrame(left_column, fg_color=self.colors["hover"], corner_radius=10)
+        students_card.pack(fill="both", expand=True)
+        
+        ctk.CTkLabel(
+            students_card,
+            text="👥 Étudiants",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=self.colors["text_dark"]
-        ).pack(anchor="w", pady=(10, 5))
+        ).pack(anchor="w", padx=15, pady=(15, 10))
         
-        # Get partner universities
+        # Search
+        ctk.CTkLabel(
+            students_card,
+            text="🔍 Rechercher :",
+            font=ctk.CTkFont(size=10),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=15)
+        
+        self.transfer_search_entry = ctk.CTkEntry(
+            students_card,
+            width=300,
+            height=32,
+            placeholder_text="Nom, Numéro ou Email"
+        )
+        self.transfer_search_entry.pack(anchor="w", padx=15, pady=(0, 10))
+        self.transfer_search_entry.bind("<KeyRelease>", self._on_transfer_search_changed)
+        
+        # Students list frame
+        self.transfer_students_scroll = ctk.CTkScrollableFrame(
+            students_card,
+            fg_color=self.colors["card_bg"],
+            corner_radius=8,
+            width=320,
+            height=250
+        )
+        self.transfer_students_scroll.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+        
+        # RIGHT COLUMN - Student Info and Transfer Form
+        right_column = ctk.CTkFrame(main_content, fg_color="transparent")
+        right_column.pack(side="right", fill="both", expand=True, padx=(10, 0))
+        
+        # Card 3: Selected Student Info
+        student_info_card = ctk.CTkFrame(right_column, fg_color=self.colors["hover"], corner_radius=10)
+        student_info_card.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            student_info_card,
+            text="📋 Informations Étudiant",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=15, pady=(15, 10))
+        
+        self.transfer_student_info_frame = ctk.CTkFrame(student_info_card, fg_color=self.colors["card_bg"], corner_radius=8)
+        self.transfer_student_info_frame.pack(fill="x", padx=15, pady=(0, 15))
+        
+        ctk.CTkLabel(
+            self.transfer_student_info_frame,
+            text="Sélectionner un étudiant",
+            font=ctk.CTkFont(size=11),
+            text_color=self.colors["text_light"]
+        ).pack(padx=10, pady=10)
+        
+        # Card 4: Transfer Form
+        form_card = ctk.CTkFrame(right_column, fg_color=self.colors["hover"], corner_radius=10)
+        form_card.pack(fill="both", expand=True)
+        
+        ctk.CTkLabel(
+            form_card,
+            text="🎯 Détails du Transfert",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=15, pady=(15, 10))
+        
+        form_scroll = ctk.CTkScrollableFrame(form_card, fg_color="transparent")
+        form_scroll.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+        
+        # Destination university + API URL editable field
+        ctk.CTkLabel(
+            form_scroll,
+            text="Université de destination :",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 5))
+
         partners = self._get_partner_universities()
         partner_options = [f"{p['university_name']} ({p['university_code']}) - {p['country']}" for p in partners]
-        
+        self._partner_id_map = {f"{p['university_name']} ({p['university_code']}) - {p['country']}": p for p in partners}
+
         self.transfer_destination_combo = ctk.CTkComboBox(
-            form_frame,
+            form_scroll,
             values=partner_options if partner_options else ["Aucune université partenaire"],
-            width=400,
-            height=35,
-            font=ctk.CTkFont(size=12)
+            width=300,
+            height=32,
+            font=ctk.CTkFont(size=11),
+            command=self._on_partner_university_changed
         )
-        self.transfer_destination_combo.pack(anchor="w", pady=(0, 15))
+        self.transfer_destination_combo.pack(anchor="w", pady=(0, 5))
         if partner_options:
             self.transfer_destination_combo.set(partner_options[0])
+
+        # API URL editable field
+        ctk.CTkLabel(
+            form_scroll,
+            text="URL API de réception (modifiable) :",
+            font=ctk.CTkFont(size=10),
+            text_color=self.colors["text_dark"]
+        ).pack(anchor="w", pady=(0, 2))
+        self.partner_api_url_var = tk.StringVar()
+        self.partner_api_url_entry = ctk.CTkEntry(
+            form_scroll,
+            width=350,
+            height=30,
+            textvariable=self.partner_api_url_var
+        )
+        self.partner_api_url_entry.pack(anchor="w", pady=(0, 5))
+        # Save button
+        self.save_api_url_btn = ctk.CTkButton(
+            form_scroll,
+            text="💾 Sauvegarder l'URL API",
+            fg_color=self.colors["primary"],
+            hover_color="#2563eb",
+            text_color=self.colors["text_white"],
+            height=32,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self._on_save_partner_api_url
+        )
+        self.save_api_url_btn.pack(anchor="w", pady=(0, 15))
+
+        # Initial fill of API URL
+        self._update_partner_api_url_entry()
+
+    def _on_partner_university_changed(self, value):
+        self._update_partner_api_url_entry()
+
+    def _update_partner_api_url_entry(self):
+        # Met à jour le champ d'URL API selon l'université sélectionnée
+        selected = self.transfer_destination_combo.get()
+        partner = self._partner_id_map.get(selected)
+        if partner:
+            self.partner_api_url_var.set(partner.get('api_url') or "")
+        else:
+            self.partner_api_url_var.set("")
+
+    def _on_save_partner_api_url(self):
+        # Sauvegarde l'URL API modifiée pour l'université sélectionnée
+        selected = self.transfer_destination_combo.get()
+        partner = self._partner_id_map.get(selected)
+        new_url = self.partner_api_url_var.get().strip()
+        if not partner:
+            ErrorManager.show_error("validation_error", "Aucune université sélectionnée.")
+            return
+        try:
+            self.transfer_service.set_partner_api_url(partner['id'], new_url)
+            partner['api_url'] = new_url
+            ErrorManager.show_success("Succès", "URL API sauvegardée avec succès.")
+        except Exception as e:
+            logger.error(f"Erreur sauvegarde URL API: {e}", exc_info=True)
+            ErrorManager.show_error("database_query", str(e))
         
         # Include documents checkbox
         self.transfer_include_docs_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
-            form_frame,
-            text="Inclure les documents et ouvrages",
+            form_scroll,
+            text="✓ Inclure les documents et ouvrages",
             variable=self.transfer_include_docs_var,
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=11),
             text_color=self.colors["text_dark"]
         ).pack(anchor="w", pady=10)
         
         # Notes
         ctk.CTkLabel(
-            form_frame,
+            form_scroll,
             text="Notes (optionnel) :",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=ctk.CTkFont(size=11, weight="bold"),
             text_color=self.colors["text_dark"]
         ).pack(anchor="w", pady=(10, 5))
         
         self.transfer_notes_text = ctk.CTkTextbox(
-            form_frame,
-            width=500,
-            height=80,
-            font=ctk.CTkFont(size=11)
+            form_scroll,
+            width=300,
+            height=70,
+            font=ctk.CTkFont(size=10)
         )
         self.transfer_notes_text.pack(anchor="w", pady=(0, 20))
         
         # Action buttons
-        button_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
-        button_frame.pack(fill="x", pady=20)
+        button_frame = ctk.CTkFrame(form_scroll, fg_color="transparent")
+        button_frame.pack(fill="x", pady=10)
         
         ctk.CTkButton(
             button_frame,
-            text="📤 Générer le Package de Transfert",
+            text="📤 Générer",
             fg_color=self.colors["success"],
             hover_color="#059669",
             text_color=self.colors["text_white"],
-            height=45,
-            font=ctk.CTkFont(size=13, weight="bold"),
+            height=40,
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=self._generate_transfer_package_action
         ).pack(side="left", padx=5)
         
         ctk.CTkButton(
             button_frame,
-            text="🔄 Actualiser",
+            text="🔄 Rafraîchir",
             fg_color=self.colors["primary"],
             hover_color="#2563eb",
             text_color=self.colors["text_white"],
-            height=45,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._show_outgoing_transfers
+            height=40,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._refresh_outgoing_transfers
         ).pack(side="left", padx=5)
+    
+    def _refresh_outgoing_transfers(self):
+        """Rafraîchit la page des transferts sortants"""
+        try:
+            # Vider complètement le contenu
+            for widget in self.transfer_tab_content.winfo_children():
+                widget.destroy()
+            
+            # Réafficher le contenu
+            self._show_outgoing_transfers()
+        except Exception as e:
+            logger.error(f"Erreur rafraîchissement transferts sortants: {e}")
+    
+    # ========== TRANSFER CASCADE METHODS ==========
+    
+    def _get_transfer_faculties(self):
+        """Récupère toutes les facultés"""
+        try:
+            return self.student_service.get_faculties()
+        except Exception as e:
+            logger.error(f"Erreur récupération facultés: {e}", exc_info=True)
+            return []
+    
+    def _on_transfer_faculty_selected(self, faculty_name):
+        """Gère la sélection d'une faculté"""
+        try:
+            faculties = self._get_transfer_faculties()
+            faculty = next((f for f in faculties if f['name'] == faculty_name), None)
+            
+            if faculty:
+                self.transfer_state['faculty_id'] = faculty['id']
+                
+                # Charger les départements
+                departments = self.student_service.get_departments_by_faculty(faculty['id'])
+                dept_names = [d['name'] for d in departments]
+                
+                self.transfer_dept_combo.configure(values=dept_names if dept_names else ["Aucun département"])
+                if dept_names:
+                    self.transfer_dept_combo.set(dept_names[0])
+                    self._on_transfer_department_selected(dept_names[0])
+                else:
+                    self.transfer_dept_combo.set("Aucun département")
+                    self.transfer_promotion_combo.configure(values=["Aucune promotion"])
+                    self._clear_transfer_students_list()
+            
+        except Exception as e:
+            logger.error(f"Erreur sélection faculté: {e}", exc_info=True)
+    
+    def _on_transfer_department_selected(self, dept_name):
+        """Gère la sélection d'un département"""
+        try:
+            if not self.transfer_state['faculty_id']:
+                return
+            
+            faculties = self._get_transfer_faculties()
+            faculty = next((f for f in faculties if f['id'] == self.transfer_state['faculty_id']), None)
+            
+            if faculty:
+                departments = self.student_service.get_departments_by_faculty(faculty['id'])
+                department = next((d for d in departments if d['name'] == dept_name), None)
+                
+                if department:
+                    self.transfer_state['department_id'] = department['id']
+                    
+                    # Charger les promotions
+                    promotions = self.student_service.get_promotions_by_department(department['id'])
+                    promo_names = [p['name'] for p in promotions]
+                    
+                    self.transfer_promotion_combo.configure(values=promo_names if promo_names else ["Aucune promotion"])
+                    if promo_names:
+                        self.transfer_promotion_combo.set(promo_names[0])
+                        self._on_transfer_promotion_selected(promo_names[0])
+                    else:
+                        self.transfer_promotion_combo.set("Aucune promotion")
+                        self._clear_transfer_students_list()
+        
+        except Exception as e:
+            logger.error(f"Erreur sélection département: {e}", exc_info=True)
+    
+    def _on_transfer_promotion_selected(self, promo_name):
+        """Gère la sélection d'une promotion"""
+        try:
+            if not self.transfer_state['department_id']:
+                return
+            
+            departments = self.student_service.get_departments_by_faculty(self.transfer_state['faculty_id'])
+            department = next((d for d in departments if d['id'] == self.transfer_state['department_id']), None)
+            
+            if department:
+                promotions = self.student_service.get_promotions_by_department(department['id'])
+                promotion = next((p for p in promotions if p['name'] == promo_name), None)
+                
+                if promotion:
+                    self.transfer_state['promotion_id'] = promotion['id']
+                    
+                    # Charger les étudiants
+                    self._update_transfer_students_list()
+                    
+                    # Effacer le champ de recherche
+                    if hasattr(self, 'transfer_search_entry'):
+                        self.transfer_search_entry.delete(0, "end")
+        
+        except Exception as e:
+            logger.error(f"Erreur sélection promotion: {e}", exc_info=True)
+    
+    def _update_transfer_students_list(self):
+        """Met à jour la liste des étudiants"""
+        try:
+            students = self._get_transfer_students_by_promotion()
+            self.transfer_state['filtered_students'] = students
+            self._clear_transfer_students_list()
+            
+            if not students:
+                # Afficher un message si aucun étudiant
+                ctk.CTkLabel(
+                    self.transfer_students_scroll,
+                    text="Aucun étudiant actif\ndans cette promotion",
+                    font=ctk.CTkFont(size=11),
+                    text_color=self.colors["text_light"]
+                ).pack(pady=20)
+                logger.info("Aucun étudiant trouvé pour cette promotion")
+            else:
+                for student in students:
+                    btn = self._create_transfer_student_button(student)
+                    btn.pack(fill="x", padx=5, pady=3)
+                logger.info(f"{len(students)} étudiant(s) affiché(s)")
+        
+        except Exception as e:
+            logger.error(f"Erreur mise à jour liste étudiants: {e}", exc_info=True)
+    
+    def _get_transfer_students_by_promotion(self, search_text=""):
+        """Récupère les étudiants filtrés par promotion"""
+        try:
+            if not self.transfer_state['promotion_id']:
+                return []
+            
+            from core.database.connection import DatabaseConnection
+            db = DatabaseConnection()
+            conn = db.get_connection()
+            cursor = conn.cursor(dictionary=True)
+            
+            query = """
+                SELECT id, student_number, firstname, lastname, email FROM student
+                WHERE promotion_id = %s AND is_active = TRUE
+            """
+            
+            params = [self.transfer_state['promotion_id']]
+            
+            if search_text:
+                query += """ AND (student_number LIKE %s OR firstname LIKE %s 
+                            OR lastname LIKE %s OR email LIKE %s)"""
+                search_like = f"%{search_text}%"
+                params.extend([search_like, search_like, search_like, search_like])
+            
+            query += " ORDER BY firstname, lastname"
+            
+            cursor.execute(query, params)
+            students = cursor.fetchall()
+            
+            logger.info(f"Étudiants trouvés pour promotion {self.transfer_state['promotion_id']}: {len(students)}")
+            
+            return students
+        
+        except Exception as e:
+            logger.error(f"Erreur récupération étudiants: {e}", exc_info=True)
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                db.close_connection(conn)
+    
+    def _on_transfer_search_changed(self, event=None):
+        """Gère la recherche en temps réel"""
+        try:
+            search_text = self.transfer_search_entry.get().strip()
+            students = self._get_transfer_students_by_promotion(search_text)
+            self.transfer_state['filtered_students'] = students
+            self._clear_transfer_students_list()
+            
+            if not students:
+                # Afficher un message si aucun résultat
+                message = "Aucun résultat" if search_text else "Aucun étudiant actif\ndans cette promotion"
+                ctk.CTkLabel(
+                    self.transfer_students_scroll,
+                    text=message,
+                    font=ctk.CTkFont(size=11),
+                    text_color=self.colors["text_light"]
+                ).pack(pady=20)
+            else:
+                for student in students:
+                    btn = self._create_transfer_student_button(student)
+                    btn.pack(fill="x", padx=5, pady=3)
+        
+        except Exception as e:
+            logger.error(f"Erreur recherche: {e}", exc_info=True)
+    
+    def _create_transfer_student_button(self, student):
+        """Crée un bouton pour chaque étudiant"""
+        student_text = f"{student['student_number']} - {student['firstname']} {student['lastname']}"
+        
+        btn = ctk.CTkButton(
+            self.transfer_students_scroll,
+            text=student_text,
+            font=ctk.CTkFont(size=11),
+            fg_color=self.colors["card_bg"],
+            text_color=self.colors["text_dark"],
+            hover_color=self.colors["primary"],
+            height=35,
+            corner_radius=8,
+            command=lambda s=student: self._select_transfer_student(s)
+        )
+        
+        return btn
+    
+    def _select_transfer_student(self, student):
+        """Sélectionne un étudiant"""
+        try:
+            self.transfer_state['selected_student'] = student
+            self._display_student_transfer_info(student)
+        
+        except Exception as e:
+            logger.error(f"Erreur sélection étudiant: {e}", exc_info=True)
+    
+    def _clear_transfer_students_list(self):
+        """Efface la liste des étudiants"""
+        try:
+            for widget in self.transfer_students_scroll.winfo_children():
+                widget.destroy()
+        except Exception as e:
+            logger.error(f"Erreur suppression liste: {e}", exc_info=True)
     
     def _show_incoming_transfers(self):
         """Affiche les demandes de transfert entrantes en attente"""
@@ -5504,8 +6390,8 @@ class AdminDashboard(ctk.CTkFrame):
             table_header = ctk.CTkFrame(container, fg_color=self.colors["primary"], corner_radius=8)
             table_header.pack(fill="x", padx=20, pady=(0, 10))
             
-            headers = ["Code", "Étudiant", "Type", "Université", "Date", "Statut", "Détails"]
-            header_widths = [120, 150, 100, 200, 120, 100, 80]
+            headers = ["Code", "Étudiant", "Type", "Université", "Date", "Statut", "Livraison", "Détails"]
+            header_widths = [120, 150, 100, 200, 120, 100, 110, 80]
             
             header_row = ctk.CTkFrame(table_header, fg_color="transparent")
             header_row.pack(fill="x", padx=10, pady=8)
@@ -5550,11 +6436,25 @@ class AdminDashboard(ctk.CTkFrame):
             'CANCELLED': self.colors['text_light']
         }
         status_color = status_colors.get(status, self.colors['text_light'])
-        
+
+        # Delivery status color
+        delivery_status = transfer.get('delivery_status', 'non_envoye')
+        delivery_colors = {
+            'envoye': self.colors['success'],
+            'echec': self.colors['danger'],
+            'non_envoye': self.colors['warning']
+        }
+        delivery_color = delivery_colors.get(delivery_status, self.colors['text_light'])
+        delivery_label = {
+            'envoye': '✅ Envoyé',
+            'echec': '❌ Échec',
+            'non_envoye': '⏳ Non envoyé'
+        }.get(delivery_status, delivery_status)
+
         # Columns
-        widths = [120, 150, 100, 200, 120, 100, 80]
+        widths = [120, 150, 100, 200, 120, 100, 110, 80]
         values = [transfer_code, student_name, transfer_type, university[:25], transfer_date]
-        
+
         for value, width in zip(values, widths[:5]):
             ctk.CTkLabel(
                 row_content,
@@ -5564,18 +6464,27 @@ class AdminDashboard(ctk.CTkFrame):
                 width=width,
                 anchor="w"
             ).pack(side="left", padx=5)
-        
+
         # Status badge
         status_frame = ctk.CTkFrame(row_content, fg_color=status_color, corner_radius=10, width=100)
         status_frame.pack(side="left", padx=5)
-        
         ctk.CTkLabel(
             status_frame,
             text=status,
             font=ctk.CTkFont(size=9, weight="bold"),
             text_color=self.colors["text_white"]
         ).pack(padx=8, pady=3)
-        
+
+        # Delivery badge
+        delivery_frame = ctk.CTkFrame(row_content, fg_color=delivery_color, corner_radius=10, width=110)
+        delivery_frame.pack(side="left", padx=5)
+        ctk.CTkLabel(
+            delivery_frame,
+            text=delivery_label,
+            font=ctk.CTkFont(size=9, weight="bold"),
+            text_color=self.colors["text_white"]
+        ).pack(padx=8, pady=3)
+
         # Details button
         ctk.CTkButton(
             row_content,
@@ -5742,25 +6651,15 @@ class AdminDashboard(ctk.CTkFrame):
             ).pack(padx=15, pady=12)
     
     def _generate_transfer_package_action(self):
-        """Génère et enregistre le package de transfert"""
+        """Génère et enregistre le package de transfert avec le système de cascade"""
         try:
-            # Get selected student
-            selected_value = self.transfer_student_combo.get()
-            if not selected_value or selected_value == "Aucun étudiant disponible":
+            # Vérifier qu'un étudiant est sélectionné
+            selected_student = self.transfer_state.get('selected_student')
+            if not selected_student:
                 messagebox.showwarning("Attention", "Veuillez sélectionner un étudiant")
                 return
             
-            student_number = selected_value.split(" - ")[0]
-            selected_student = next(
-                (s for s in self.transfer_available_students if s['student_number'] == student_number),
-                None
-            )
-            
-            if not selected_student:
-                messagebox.showerror("Erreur", "Étudiant introuvable")
-                return
-            
-            # Get selected destination
+            # Vérifier la destination
             dest_value = self.transfer_destination_combo.get()
             if not dest_value or dest_value == "Aucune université partenaire":
                 messagebox.showwarning("Attention", "Veuillez sélectionner une université de destination")
@@ -5772,7 +6671,7 @@ class AdminDashboard(ctk.CTkFrame):
                 messagebox.showerror("Erreur", "Format université invalide")
                 return
             
-            # Get partner universities fresh
+            # Récupérer l'université partenaire
             partners = self._get_partner_universities()
             selected_partner = next((p for p in partners if p['university_code'] == dest_code), None)
             
@@ -5780,11 +6679,11 @@ class AdminDashboard(ctk.CTkFrame):
                 messagebox.showerror("Erreur", "Université introuvable")
                 return
             
-            # Get options
+            # Récupérer les options
             include_docs = self.transfer_include_docs_var.get()
             notes = self.transfer_notes_text.get("1.0", "end-1c").strip()
             
-            # Initiate transfer
+            # Initier le transfert
             success, result = self.transfer_service.initiate_outgoing_transfer(
                 student_id=selected_student['id'],
                 destination_university=selected_partner['university_name'],
@@ -5795,19 +6694,45 @@ class AdminDashboard(ctk.CTkFrame):
             )
             
             if success:
+                # Envoi automatique à l'API partenaire
+                delivery_status = "non envoyé"
+                delivery_message = ""
+                try:
+                    api_url = selected_partner.get('api_url')
+                    if api_url:
+                        # Récupérer les données du transfert
+                        transfer_data = self.transfer_service.get_transfer_package_by_code(result)
+                        import json
+                        from app.services.transfer.transfer_service import CustomJSONEncoder
+                        headers = {'Content-Type': 'application/json'}
+                        response = requests.post(api_url, data=json.dumps(transfer_data, cls=CustomJSONEncoder), headers=headers, timeout=10)
+                        if response.status_code == 200:
+                            delivery_status = "envoyé"
+                            delivery_message = "✅ Données envoyées avec succès à l'API partenaire."
+                        else:
+                            delivery_status = "échec"
+                            delivery_message = f"❌ Erreur lors de l'envoi à l'API partenaire: {response.status_code} {response.text}"
+                    else:
+                        delivery_message = "⚠️ Aucune URL API définie pour l'université partenaire."
+                except Exception as ex:
+                    delivery_status = "échec"
+                    delivery_message = f"❌ Exception lors de l'envoi à l'API partenaire: {ex}"
+
+                # Afficher le résultat à l'utilisateur
                 messagebox.showinfo(
                     "Succès",
-                    f"Transfert créé avec succès!\n\n"
+                    f"✅ Transfert créé avec succès!\n\n"
                     f"Code de transfert: {result}\n\n"
-                    f"Les données ont été enregistrées et peuvent être "
-                    f"exportées vers l'université destinataire."
+                    f"Statut de livraison: {delivery_status}\n{delivery_message}"
                 )
-                # Refresh the view
-                self._show_outgoing_transfers()
+                # Enregistrer le statut de livraison dans la base
+                status_map = {"envoyé": "envoye", "échec": "echec", "non envoyé": "non_envoye"}
+                self.transfer_service.update_delivery_status(result, status_map.get(delivery_status, "non_envoye"), delivery_message)
+                self._refresh_outgoing_transfers()
             else:
                 messagebox.showerror(
                     "Erreur",
-                    f"Impossible de créer le transfert:\n{result}"
+                    f"❌ Impossible de créer le transfert:\n{result}"
                 )
         
         except Exception as e:

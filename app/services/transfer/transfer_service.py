@@ -2,7 +2,7 @@
 import json
 import hashlib
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Dict, Optional, Tuple
 from decimal import Decimal
 
@@ -17,13 +17,44 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class JSONSerializableEncoder(json.JSONEncoder):
+    """Encodeur JSON personnalisé pour gérer les types non sérialisables"""
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        elif isinstance(obj, Decimal):
+            return float(obj)
+        return super().default(obj)
+
+
 class TransferService:
+    def update_delivery_status(self, transfer_code: str, status: str, message: str = None) -> bool:
+        """Met à jour le statut de livraison et le message dans transfer_history"""
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            query = """
+                UPDATE transfer_history
+                SET delivery_status = %s, delivery_message = %s, updated_at = NOW()
+                WHERE transfer_code = %s
+            """
+            cursor.execute(query, (status, message, transfer_code))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erreur mise à jour statut livraison: {e}", exc_info=True)
+            return False
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                self.db.close_connection(conn)
+
     """Service pour gérer les transferts de données étudiantes entre universités"""
-    
     def __init__(self):
         self.db = DatabaseConnection()
         self.university_code = "UOR"  # Code de notre université
-        self.university_name = "Université Officielle de Riba-Ulindi"
+        self.university_name = "Université Officielle de Ruwenzori"
     
     # ========== EXPORT / OUTGOING TRANSFERS ==========
     
@@ -139,7 +170,7 @@ class TransferService:
                 package['documents']['total_documents'],
                 package['academic_records']['total_credits'],
                 initiated_by,
-                json.dumps(package, ensure_ascii=False),
+                json.dumps(package, ensure_ascii=False, cls=JSONSerializableEncoder),
                 notes
             ))
             
@@ -211,7 +242,7 @@ class TransferService:
                 target_promotion_id,
                 'PENDING_REVIEW',
                 datetime.now(),
-                json.dumps(transfer_data, ensure_ascii=False)
+                json.dumps(transfer_data, ensure_ascii=False, cls=JSONSerializableEncoder)
             ))
             
             conn.commit()
@@ -363,7 +394,7 @@ class TransferService:
                 documents_imported,
                 approved_by,
                 datetime.now(),
-                json.dumps(transfer_data, ensure_ascii=False)
+                json.dumps(transfer_data, ensure_ascii=False, cls=JSONSerializableEncoder)
             ))
             
             # 7. Mettre à jour la demande
@@ -700,3 +731,37 @@ class TransferService:
             return False
         
         return True
+
+    def get_partner_api_url(self, university_code: str) -> Optional[str]:
+        """Récupère l'URL d'API d'une université partenaire"""
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT api_url FROM partner_university WHERE university_code = %s", (university_code,))
+            result = cursor.fetchone()
+            return result['api_url'] if result and result['api_url'] else None
+        except Exception as e:
+            logger.error(f"Erreur récupération API partenaire: {e}", exc_info=True)
+            return None
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                self.db.close_connection(conn)
+
+    def set_partner_api_url(self, university_code: str, api_url: str) -> bool:
+        """Met à jour l'URL d'API d'une université partenaire"""
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE partner_university SET api_url = %s WHERE university_code = %s", (api_url, university_code))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erreur mise à jour API partenaire: {e}", exc_info=True)
+            return False
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                self.db.close_connection(conn)

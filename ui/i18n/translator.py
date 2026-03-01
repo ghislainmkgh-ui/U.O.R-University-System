@@ -107,6 +107,71 @@ TRANSLATIONS = {
         "reports_subtitle": "Analyse par faculté et performance",
         "academic_years_title": "Années Académiques",
         "academic_years_subtitle": "Gestion des seuils financiers et périodes d'examens",
+        
+        # Dashboard Détaillé (Nouveau)
+        "academic_platform": "Plateforme d'Accès Académique",
+        "platform_description": "Gestion académique centralisée pour l'accès sécurisé aux examens",
+        "manage_eligibility": "Contrôlez l'éligibilité des étudiants",
+        "track_payments": "Suivez les paiements",
+        "view_access_history": "Consultez l'historique d'accès",
+        "exam_access_security": "temps réel",
+        
+        # Statistiques Dashboard
+        "total_students": "Total Étudiants",
+        "eligible_count": "Éligibles",
+        "non_eligible_count": "Non Éligibles",
+        "access_statistics": "Statistiques d'Accès",
+        "granted_count": "Autorisés",
+        "denied_count": "Refusés",
+        "completion_rate": "Taux d'Éligibilité",
+        "financial_overview": "Aperçu Financier",
+        "total_revenue": "Revenus Totaux",
+        "recent_activities": "Activités Récentes",
+        "no_activities": "Aucune activité récente",
+        
+        # Cartes Dashboard
+        "platform_card_title": "📚 Plateforme d'Accès aux Examens",
+        "activities_card_title": "🕐 Activités Récentes",
+        "eligibility_card_title": "📊 Taux d'Éligibilité",
+        "access_card_title": "🔐 Accès",
+        "finance_card_title": "💰 Finances",
+        
+        # Graphiques
+        "real_time": "Temps réel",
+        "access_evolution": "Évolution des accès",
+        "financial_evolution": "Évolution financière",
+        "last_30_days": "Derniers 30 jours",
+        "growth_rate": "Taux de croissance",
+        "completion": "Complétion",
+        
+        # Actions
+        "view_details": "Voir Détails",
+        "manage_students": "Gérer Les Étudiants",
+        "manage_finance": "Gérer Les Finances",
+        "view_logs": "Voir Les Journaux",
+        "generate_report": "Générer Rapport",
+        
+        # Dialogues et Modales
+        "confirmation": "Confirmation",
+        "are_you_sure": "Êtes-vous sûr?",
+        "yes": "Oui",
+        "no": "Non",
+        "ok": "D'accord",
+        "close": "Fermer",
+        
+        # Messages d'Erreur et de Succès
+        "operation_success": "Opération réussie",
+        "operation_failed": "L'opération a échoué",
+        "please_try_again": "Veuillez réessayer",
+        "network_error": "Erreur réseau",
+        "connection_lost": "Connexion perdue",
+        "reconnecting": "Reconnexion",
+        
+        # Formatage de Données
+        "currency_symbol": "FC",
+        "date_format": "%d/%m/%Y",
+        "time_format": "%H:%M:%S",
+        "datetime_format": "%d/%m/%Y %H:%M",
     },
     "EN": {
         # Language and platform
@@ -214,6 +279,71 @@ TRANSLATIONS = {
         "reports_subtitle": "Analysis by faculty and performance",
         "academic_years_title": "Academic Years",
         "academic_years_subtitle": "Manage thresholds and exam periods",
+        
+        # Detailed Dashboard (New)
+        "academic_platform": "Academic Access Platform",
+        "platform_description": "Centralized academic management for secure exam access",
+        "manage_eligibility": "Control student eligibility",
+        "track_payments": "Track payments",
+        "view_access_history": "View access history",
+        "exam_access_security": "Real-time",
+        
+        # Dashboard Statistics
+        "total_students": "Total Students",
+        "eligible_count": "Eligible",
+        "non_eligible_count": "Non-Eligible",
+        "access_statistics": "Access Statistics",
+        "granted_count": "Granted",
+        "denied_count": "Denied",
+        "completion_rate": "Eligibility Rate",
+        "financial_overview": "Financial Overview",
+        "total_revenue": "Total Revenue",
+        "recent_activities": "Recent Activities",
+        "no_activities": "No recent activities",
+        
+        # Dashboard Cards
+        "platform_card_title": "📚 Exam Access Platform",
+        "activities_card_title": "🕐 Recent Activities",
+        "eligibility_card_title": "📊 Eligibility Rate",
+        "access_card_title": "🔐 Access",
+        "finance_card_title": "💰 Finance",
+        
+        # Charts
+        "real_time": "Real-time",
+        "access_evolution": "Access Evolution",
+        "financial_evolution": "Financial Evolution",
+        "last_30_days": "Last 30 Days",
+        "growth_rate": "Growth Rate",
+        "completion": "Completion",
+        
+        # Actions
+        "view_details": "View Details",
+        "manage_students": "Manage Students",
+        "manage_finance": "Manage Finance",
+        "view_logs": "View Logs",
+        "generate_report": "Generate Report",
+        
+        # Dialogs and Modals
+        "confirmation": "Confirmation",
+        "are_you_sure": "Are you sure?",
+        "yes": "Yes",
+        "no": "No",
+        "ok": "Okay",
+        "close": "Close",
+        
+        # Error and Success Messages
+        "operation_success": "Operation successful",
+        "operation_failed": "Operation failed",
+        "please_try_again": "Please try again",
+        "network_error": "Network error",
+        "connection_lost": "Connection lost",
+        "reconnecting": "Reconnecting",
+        
+        # Data Formatting
+        "currency_symbol": "FC",
+        "date_format": "%d/%m/%Y",
+        "time_format": "%H:%M:%S",
+        "datetime_format": "%d/%m/%Y %H:%M",
     }
 }
 

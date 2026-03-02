@@ -243,6 +243,7 @@ class AdminDashboard(ctk.CTkFrame):
         self._sidebar_update_debounce_job = None
         self._scrolling_active = False
         self.debug_students_table = False
+        self.sidebar_mode_manual = None  # None=auto, "compact"=forcer compact, "full"=forcer complet
         
         self.colors = self._get_color_palette()
         ctk.set_appearance_mode("Dark" if self.theme.current_theme == "dark" else "Light")
@@ -493,6 +494,69 @@ class AdminDashboard(ctk.CTkFrame):
             logo_frame, text="TABLEAU DE BORD ADMIN", font=ctk.CTkFont(size=11), text_color=self.colors["text_light"]
         )
         self.logo_subtitle_label.pack()
+        
+        # === BARRES HORIZONTALES POUR REDIMENSIONNER ===
+        bars_frame = ctk.CTkFrame(sidebar, fg_color=self.colors["sidebar_bg"])
+        bars_frame.pack(fill="x", padx=15, pady=12)
+        bars_frame.pack_propagate(True)
+        
+        # Bouton stylisé avec barres - utiliser un Frame cliquable
+        self.sidebar_expand_btn = ctk.CTkFrame(
+            bars_frame,
+            fg_color="#1e293b",
+            border_width=1,
+            border_color="#334155",
+            corner_radius=8,
+            height=50
+        )
+        self.sidebar_expand_btn.pack(fill="x", pady=0)
+        self.sidebar_expand_btn.pack_propagate(False)
+        
+        # Rendre le frame cliquable avec hover effect
+        def on_expand_enter(e):
+            self.sidebar_expand_btn.configure(fg_color="#334155")
+            self.sidebar_expand_btn.configure(border_color="#475569")
+        
+        def on_expand_leave(e):
+            self.sidebar_expand_btn.configure(fg_color="#1e293b")
+            self.sidebar_expand_btn.configure(border_color="#334155")
+        
+        self.sidebar_expand_btn.bind("<Button-1>", lambda e: self._toggle_sidebar_expand())
+        self.sidebar_expand_btn.bind("<Enter>", on_expand_enter)
+        self.sidebar_expand_btn.bind("<Leave>", on_expand_leave)
+        
+        # Créer 4 barres horizontales stylisées dans le frame
+        bars_inner = ctk.CTkFrame(self.sidebar_expand_btn, fg_color="transparent")
+        bars_inner.pack(expand=True)
+        
+        for i in range(4):
+            bar = ctk.CTkFrame(
+                bars_inner, 
+                height=2.5, 
+                width=30,
+                fg_color="#94a3b8",
+                corner_radius=1
+            )
+            bar.pack(fill="x", pady=2)
+        
+        # Rendre aussi les barres cliquables et hover-actives
+        bars_inner.bind("<Button-1>", lambda e: self._toggle_sidebar_expand())
+        bars_inner.bind("<Enter>", on_expand_enter)
+        bars_inner.bind("<Leave>", on_expand_leave)
+        
+        for child in bars_inner.winfo_children():
+            child.bind("<Button-1>", lambda e: self._toggle_sidebar_expand())
+            child.bind("<Enter>", on_expand_enter)
+            child.bind("<Leave>", on_expand_leave)
+        
+        # Label du mode
+        self.sidebar_mode_label = ctk.CTkLabel(
+            bars_frame,
+            text="Mode: Compact" if self.sidebar_mode == "compact" else "Mode: Complet",
+            text_color="#64748b",
+            font=ctk.CTkFont(size=8)
+        )
+        self.sidebar_mode_label.pack(pady=(6, 0))
         
         # Séparateur
         ctk.CTkFrame(sidebar, height=1, fg_color="#334155").pack(fill="x", padx=20, pady=15)
@@ -828,12 +892,33 @@ class AdminDashboard(ctk.CTkFrame):
         """Effectue réellement la mise à jour du sidebar"""
         self._sidebar_update_debounce_job = None
         
-        # Toujours forcer le mode compact pour gagner de l'espace
+        # Si l'utilisateur a manuellement changé le mode, respecter son choix
+        if self.sidebar_mode_manual is not None:
+            return
+        
+        # Sinon, utiliser le mode auto (compact par défaut)
         target_mode = "compact"
         if target_mode == self.sidebar_mode:
             return
 
         self._apply_sidebar_mode(target_mode)
+    
+    def _toggle_sidebar_expand(self):
+        """Bascule entre le mode compact et le mode complet"""
+        # Déterminer le nouveau mode
+        if self.sidebar_mode == "compact":
+            new_mode = "full"
+        else:
+            new_mode = "compact"
+        
+        # Marquer que c'est un choix manuel
+        self.sidebar_mode_manual = new_mode
+        
+        # Appliquer le nouveau mode
+        self._apply_sidebar_mode(new_mode)
+        
+        # Mettre à jour le label
+        self._update_sidebar_mode_label()
 
     def _apply_sidebar_mode(self, mode: str):
         """Applique le mode compact ou complet à la sidebar"""
@@ -889,6 +974,20 @@ class AdminDashboard(ctk.CTkFrame):
                     pass
 
             self._unbind_sidebar_hover_expand()
+
+    def _update_sidebar_mode_label(self):
+        """Met à jour le label pour afficher le mode actuel"""
+        try:
+            if self.sidebar_mode == "compact":
+                label_text = "Mode: Compact"
+            else:
+                label_text = "Mode: Complet"
+            
+            # Mettre à jour le label
+            if hasattr(self, 'sidebar_mode_label') and self.sidebar_mode_label:
+                self.sidebar_mode_label.configure(text=label_text)
+        except Exception as e:
+            logger.warning(f"Error updating sidebar mode label: {e}")
 
     def _bind_sidebar_hover_expand(self):
         if not self.sidebar:

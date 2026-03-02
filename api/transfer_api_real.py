@@ -1,6 +1,6 @@
 """
 API REST pour la Communication Inter-Universitaire
-Exemple d'implémentation pour U.O.R
+Exemple d'implémentation pour U.O.R - Utilise le vrai TransferService
 """
 
 from flask import Flask, request, jsonify
@@ -9,26 +9,14 @@ import jwt
 import hashlib
 from datetime import datetime, timedelta
 from functools import wraps
-
-"""
-Classe mock TransferService pour tests sans dépendance externe
-"""
-class TransferService:
-    def receive_transfer_request(self, transfer_data, target_promotion_id):
-        # Simule une réception de transfert réussie
-        return True, "REQ-TEST"
-    def prepare_student_transfer_package(self, student_id, include_documents=True):
-        # Simule la préparation d’un package de transfert
-        return {"transfer_metadata": {"transfer_code": "TCODE-TEST"}}
-    @property
-    def db(self):
-        # Simule un objet db sans connexion réelle
-        class DummyDB:
-            def get_connection(self): return None
-            def close_connection(self, conn): pass
-        return DummyDB()
 import logging
+import sys
+import os
 
+# Ajouter le répertoire parent au path pour pouvoir importer les modules de l'application
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from app.services.transfer.transfer_service import TransferService
 
 # Configuration basique du logger pour affichage console
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -82,9 +70,6 @@ def require_api_key(f):
             payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
             request.university_code = payload['university_code']
             
-            # Vérifier que l'université est dans nos partenaires
-            # TODO: Implémenter la vérification dans la base de données
-            
         except jwt.ExpiredSignatureError:
             return jsonify({
                 'success': False,
@@ -107,7 +92,7 @@ def health_check():
     """Endpoint de santé pour vérifier que l'API est accessible"""
     return jsonify({
         'status': 'healthy',
-        'service': 'U.O.R Transfer API',
+        'service': 'U.O.R Transfer API (Real Service)',
         'version': app.config['API_VERSION'],
         'timestamp': datetime.now().isoformat()
     }), 200
@@ -168,6 +153,9 @@ def receive_transfer():
                     'error': f'Missing required field: {field}'
                 }), 400
         
+        logger.info(f"🔄 Réception d'un package de transfert depuis {transfer_data.get('transfer_metadata', {}).get('source_university', 'Unknown')}")
+        logger.info(f"📦 Données reçues: {len(transfer_data.get('academic_records', {}).get('records', []))} notes académiques")
+        
         # Créer la demande de transfert
         success, result = transfer_service.receive_transfer_request(
             transfer_data=transfer_data,
@@ -175,7 +163,7 @@ def receive_transfer():
         )
         
         if success:
-            logger.info(f"Demande de transfert reçue: {result} depuis {request.university_code}")
+            logger.info(f"✅ Demande de transfert reçue avec succès: {result}")
             
             return jsonify({
                 'success': True,
@@ -184,7 +172,7 @@ def receive_transfer():
                 'status': 'PENDING_REVIEW'
             }), 201
         else:
-            logger.error(f"Échec de réception du transfert: {result}")
+            logger.error(f"❌ Échec de réception du transfert: {result}")
             
             return jsonify({
                 'success': False,
@@ -192,11 +180,11 @@ def receive_transfer():
             }), 400
     
     except Exception as e:
-        logger.error(f"Erreur lors de la réception du transfert: {e}", exc_info=True)
+        logger.error(f"❌ Erreur lors de la réception du transfert: {e}", exc_info=True)
         
         return jsonify({
             'success': False,
-            'error': 'Internal server error'
+            'error': f'Internal server error: {str(e)}'
         }), 500
 
 @app.route('/api/v1/transfer/send', methods=['POST'])
@@ -218,7 +206,8 @@ def send_transfer():
         student_id = data['student_id']
         destination_code = data['destination_university_code']
         include_documents = data.get('include_documents', True)
-        notes = data.get('notes', None)
+        
+        logger.info(f"📤 Préparation du package de transfert pour l'étudiant ID: {student_id} vers {destination_code}")
         
         # Préparer le package
         package = transfer_service.prepare_student_transfer_package(
@@ -229,13 +218,10 @@ def send_transfer():
         if not package:
             return jsonify({
                 'success': False,
-                'error': 'Failed to prepare transfer package'
+                'error': 'Failed to prepare transfer package - Student not found or data incomplete'
             }), 500
         
-        # TODO: Récupérer l'endpoint de l'université destination
-        # Pour l'instant, juste retourner le package
-        
-        logger.info(f"Package de transfert préparé pour étudiant {student_id} vers {destination_code}")
+        logger.info(f"✅ Package préparé: {package['academic_records']['total_courses']} cours, {package['documents']['total_documents']} documents")
         
         return jsonify({
             'success': True,
@@ -245,11 +231,11 @@ def send_transfer():
         }), 200
     
     except Exception as e:
-        logger.error(f"Erreur lors de l'envoi du transfert: {e}", exc_info=True)
+        logger.error(f"❌ Erreur lors de l'envoi du transfert: {e}", exc_info=True)
         
         return jsonify({
             'success': False,
-            'error': 'Internal server error'
+            'error': f'Internal server error: {str(e)}'
         }), 500
 
 @app.route('/api/v1/transfer/status/<transfer_code>', methods=['GET'])
@@ -259,7 +245,7 @@ def get_transfer_status(transfer_code):
     try:
         # TODO: Implémenter la récupération du statut depuis la base de données
         
-        logger.info(f"Statut demandé pour transfert {transfer_code}")
+        logger.info(f"📊 Statut demandé pour transfert {transfer_code}")
         
         return jsonify({
             'success': True,
@@ -269,7 +255,7 @@ def get_transfer_status(transfer_code):
         }), 200
     
     except Exception as e:
-        logger.error(f"Erreur lors de la récupération du statut: {e}", exc_info=True)
+        logger.error(f"❌ Erreur lors de la récupération du statut: {e}", exc_info=True)
         
         return jsonify({
             'success': False,
@@ -293,6 +279,9 @@ def list_partner_universities():
         cursor.execute(query)
         partners = cursor.fetchall()
         
+        cursor.close()
+        transfer_service.db.close_connection(conn)
+        
         return jsonify({
             'success': True,
             'count': len(partners),
@@ -300,18 +289,12 @@ def list_partner_universities():
         }), 200
     
     except Exception as e:
-        logger.error(f"Erreur lors de la récupération des universités: {e}", exc_info=True)
+        logger.error(f"❌ Erreur lors de la récupération des universités: {e}", exc_info=True)
         
         return jsonify({
             'success': False,
             'error': 'Internal server error'
         }), 500
-    
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            transfer_service.db.close_connection(conn)
 
 # ==================== ERROR HANDLERS ====================
 
@@ -332,8 +315,13 @@ def internal_error(error):
 # ==================== STARTUP ====================
 
 if __name__ == '__main__':
-    logger.info("Démarrage de l'API de transfert U.O.R")
+    logger.info("=" * 70)
+    logger.info(" 🚀 Démarrage de l'API de transfert U.O.R (Real Service)")
+    logger.info("=" * 70)
     logger.info(f"Version: {app.config['API_VERSION']}")
+    logger.info(f"Host: 0.0.0.0:5000")
+    logger.info(f"Mode: DEBUG (Development)")
+    logger.info("=" * 70)
     
     # En production, utiliser un serveur WSGI comme Gunicorn
     app.run(

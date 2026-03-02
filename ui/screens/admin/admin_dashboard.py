@@ -1287,7 +1287,7 @@ class AdminDashboard(ctk.CTkFrame):
                 "weights": [1.2, 3, 1.2, 2, 2, 1.2, 1.2] if not is_small_screen else [1, 2, 1, 1.5, 1.5, 1, 1], "anchors": ["center", "w", "w", "e", "e", "center", "center"], "min_widths_large": [70, 220, 90, 150, 150, 110, 110], "min_widths_compact": [60, 170, 80, 120, 120, 95, 95], "min_widths_tiny": [50, 130, 70, 100, 100, 80, 80], }, "access_logs": {
                 "weights": [1.2, 3, 1.2, 2, 1, 1, 1, 1, 1.2] if not is_small_screen else [1, 2, 1, 1.5, 0.8, 0.8, 0.8, 0.8, 1], "anchors": ["center", "w", "w", "w", "center", "center", "center", "center", "e"], "min_widths_large": [70, 220, 90, 160, 90, 90, 90, 90, 100], "min_widths_compact": [60, 170, 80, 130, 75, 75, 75, 75, 90], "min_widths_tiny": [50, 130, 70, 100, 65, 65, 65, 65, 80], }, "reports_faculty": {
                 "weights": [1.2, 2.5, 2.5, 1.2, 1.2, 1.2, 2] if not is_small_screen else [1, 2, 2, 1, 1, 1, 1.5], "anchors": ["center", "w", "w", "center", "center", "center", "e"], "min_widths_large": [70, 180, 180, 120, 120, 120, 150], "min_widths_compact": [60, 150, 150, 110, 110, 110, 130], "min_widths_tiny": [50, 120, 120, 95, 95, 95, 110], }, "academic_promos": {
-                "weights": [2.2, 3, 3, 1.2, 1.2, 1.2, 1.2] if not is_small_screen else [2, 2.2, 2.2, 1, 1, 1, 1], "anchors": ["center", "center", "center", "center", "center", "center", "center"], "min_widths_large": [180, 220, 220, 90, 110, 110, 110], "min_widths_compact": [160, 180, 180, 80, 95, 95, 95], "min_widths_tiny": [140, 140, 140, 75, 85, 85, 85], }, "exam_periods": {
+                "weights": [2.2, 3, 3, 1.2, 1.2, 1.2, 1.2] if not is_small_screen else [2, 2.2, 2.2, 1, 1, 1, 1], "anchors": ["center", "center", "center", "center", "center", "center", "center"], "min_widths_large": [170, 210, 210, 85, 100, 100, 100], "min_widths_compact": [160, 180, 180, 80, 95, 95, 95], "min_widths_tiny": [140, 140, 140, 75, 85, 85, 85], }, "exam_periods": {
                 "weights": [3, 1.2, 1.2, 1.2] if not is_tiny_screen else [2, 1, 1, 1], "anchors": ["w", "center", "center", "e"], "min_widths_large": [220, 120, 120, 110], "min_widths_compact": [180, 100, 100, 95], "min_widths_tiny": [140, 85, 85, 80], }, }
 
         layout = layouts.get(key)
@@ -3556,11 +3556,11 @@ class AdminDashboard(ctk.CTkFrame):
                     row, text=str(promo.get('year') or "-"), font=ctk.CTkFont(size=11), text_color=self.colors["text_dark"], anchor="center"
                 ).grid(row=0, column=3, sticky="ew", padx=10, pady=8)
 
-                fee_entry = ctk.CTkEntry(row, width=140, justify="center")
+                fee_entry = ctk.CTkEntry(row, width=100, justify="center")
                 fee_entry.insert(0, f"{Decimal(str(fee_value)):.2f}")
                 fee_entry.grid(row=0, column=4, sticky="ew", padx=10, pady=8)
 
-                threshold_entry = ctk.CTkEntry(row, width=140, justify="center")
+                threshold_entry = ctk.CTkEntry(row, width=100, justify="center")
                 threshold_entry.insert(0, f"{Decimal(str(threshold_value)):.2f}")
                 threshold_entry.grid(row=0, column=5, sticky="ew", padx=10, pady=8)
 

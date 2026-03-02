@@ -12,6 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 from tkinter import filedialog, messagebox, StringVar
 import tkinter as tk
+from tkinter import ttk
 from PIL import Image
 from ui.i18n.translator import Translator
 from ui.theme.theme_manager import ThemeManager
@@ -1236,6 +1237,27 @@ class AdminDashboard(ctk.CTkFrame):
             else:
                 frame.grid_columnconfigure(idx, weight=weight_value)
 
+    def _create_horizontal_scrollable_table(self, parent, headers, column_weights, anchors=None, min_widths=None):
+        """Crée une table avec scroll horizontal si nécessaire - retourne le conteneur des rows"""
+        # Calculer la largeur totale requise
+        total_min_width = sum(min_widths) if min_widths else 0
+        can_fit = total_min_width + 50 < (self.screen_width - 120)  # 120px pour sidebar + margins
+        
+        scroll_container = ctk.CTkFrame(parent, fg_color="transparent")
+        scroll_container.pack(fill="both", expand=True, padx=0, pady=0)
+        
+        # En-tête
+        header_frame = self._create_table_header(scroll_container, headers, column_weights, 
+                                                 anchors=anchors, min_widths=min_widths, 
+                                                 padx=10, pady=8)
+        
+        # Scroll frame pour les données (utilise le scrolling vertical par défaut)
+        data_scroll = ctk.CTkScrollableFrame(scroll_container, fg_color="transparent")
+        data_scroll.pack(fill="both", expand=True, padx=0, pady=0)
+        
+        return data_scroll
+
+
     def _set_scrollbar_visible(self, scrollable_frame, visible: bool, width: int = None):
         """Affiche ou masque la barre de scroll d'un CTkScrollableFrame"""
         bar = getattr(scrollable_frame, "_scrollbar", None)
@@ -1266,7 +1288,7 @@ class AdminDashboard(ctk.CTkFrame):
         for col, header_text in enumerate(headers):
             anchor = anchors[col] if anchors else "center"
             label = ctk.CTkLabel(
-                header_frame, text=header_text, font=ctk.CTkFont(size=header_font_size, weight="bold"), text_color=self.colors["text_dark"], anchor=anchor, wraplength=min_widths[col] - 4 if min_widths and col < len(min_widths) else 0
+                header_frame, text=header_text, font=ctk.CTkFont(size=header_font_size, weight="bold"), text_color=self.colors["text_dark"], anchor=anchor
             )
             label.grid(row=0, column=col, sticky="ew", padx=padx, pady=pady)
 
@@ -1287,7 +1309,7 @@ class AdminDashboard(ctk.CTkFrame):
                 "weights": [1.2, 3, 1.2, 2, 2, 1.2, 1.2] if not is_small_screen else [1, 2, 1, 1.5, 1.5, 1, 1], "anchors": ["center", "w", "w", "e", "e", "center", "center"], "min_widths_large": [70, 220, 90, 150, 150, 110, 110], "min_widths_compact": [60, 170, 80, 120, 120, 95, 95], "min_widths_tiny": [50, 130, 70, 100, 100, 80, 80], }, "access_logs": {
                 "weights": [1.2, 3, 1.2, 2, 1, 1, 1, 1, 1.2] if not is_small_screen else [1, 2, 1, 1.5, 0.8, 0.8, 0.8, 0.8, 1], "anchors": ["center", "w", "w", "w", "center", "center", "center", "center", "e"], "min_widths_large": [70, 220, 90, 160, 90, 90, 90, 90, 100], "min_widths_compact": [60, 170, 80, 130, 75, 75, 75, 75, 90], "min_widths_tiny": [50, 130, 70, 100, 65, 65, 65, 65, 80], }, "reports_faculty": {
                 "weights": [1.2, 2.5, 2.5, 1.2, 1.2, 1.2, 2] if not is_small_screen else [1, 2, 2, 1, 1, 1, 1.5], "anchors": ["center", "w", "w", "center", "center", "center", "e"], "min_widths_large": [70, 180, 180, 120, 120, 120, 150], "min_widths_compact": [60, 150, 150, 110, 110, 110, 130], "min_widths_tiny": [50, 120, 120, 95, 95, 95, 110], }, "academic_promos": {
-                "weights": [2.2, 3, 3, 1.2, 1.2, 1.2, 1.2] if not is_small_screen else [2, 2.2, 2.2, 1, 1, 1, 1], "anchors": ["center", "center", "center", "center", "center", "center", "center"], "min_widths_large": [170, 210, 210, 85, 100, 100, 100], "min_widths_compact": [160, 180, 180, 80, 95, 95, 95], "min_widths_tiny": [140, 140, 140, 75, 85, 85, 85], }, "exam_periods": {
+                "weights": [2.2, 3, 3, 1.2, 1.2, 1.2, 1.2] if not is_small_screen else [2, 2.2, 2.2, 1, 1, 1, 1], "anchors": ["center", "center", "center", "center", "center", "center", "center"], "min_widths_large": [150, 180, 180, 90, 90, 90, 90], "min_widths_compact": [160, 180, 180, 80, 95, 95, 95], "min_widths_tiny": [140, 140, 140, 75, 85, 85, 85], }, "exam_periods": {
                 "weights": [3, 1.2, 1.2, 1.2] if not is_tiny_screen else [2, 1, 1, 1], "anchors": ["w", "center", "center", "e"], "min_widths_large": [220, 120, 120, 110], "min_widths_compact": [180, 100, 100, 95], "min_widths_tiny": [140, 85, 85, 80], }, }
 
         layout = layouts.get(key)
@@ -3507,15 +3529,15 @@ class AdminDashboard(ctk.CTkFrame):
         promo_anchors = layout["anchors"]
         promo_min_widths = layout["min_widths"]
         
-        # Créer un container pour l'en-tête et les données avec le même padding
+        # Créer un container pour l'en-tête et les données avec scroll horizontal si nécessaire
         promo_table_container = ctk.CTkFrame(promo_card, fg_color="transparent")
         promo_table_container.pack(fill="both", expand=True, padx=25, pady=(15, 20))
         
-        # En-tête avec le même padding que les données
-        self._create_table_header(promo_table_container, promo_headers, promo_weights, anchors=promo_anchors, min_widths=promo_min_widths, padx=10, pady=8)
-
-        promo_scroll = ctk.CTkScrollableFrame(promo_table_container)
-        promo_scroll.pack(fill="both", expand=True, padx=0, pady=0)
+        # Utiliser la fonction générique de scroll horizontal
+        promo_scroll = self._create_horizontal_scrollable_table(
+            promo_table_container, promo_headers, promo_weights, 
+            anchors=promo_anchors, min_widths=promo_min_widths
+        )
 
         def render_promotions():
             for widget in promo_scroll.winfo_children():
@@ -3533,8 +3555,9 @@ class AdminDashboard(ctk.CTkFrame):
                 return
 
             for promo in filtered_promos:
-                row = ctk.CTkFrame(promo_scroll, fg_color=self.colors["hover"], corner_radius=6)
+                row = ctk.CTkFrame(promo_scroll, fg_color=self.colors["hover"], corner_radius=6, height=50)
                 row.pack(fill="x", pady=4)
+                row.pack_propagate(False)
                 self._configure_table_columns(row, promo_weights, min_widths=promo_min_widths)
 
                 fee_value = promo.get('fee_usd') or 0
@@ -3556,11 +3579,11 @@ class AdminDashboard(ctk.CTkFrame):
                     row, text=str(promo.get('year') or "-"), font=ctk.CTkFont(size=11), text_color=self.colors["text_dark"], anchor="center"
                 ).grid(row=0, column=3, sticky="ew", padx=10, pady=8)
 
-                fee_entry = ctk.CTkEntry(row, width=100, justify="center")
+                fee_entry = ctk.CTkEntry(row, justify="center")
                 fee_entry.insert(0, f"{Decimal(str(fee_value)):.2f}")
                 fee_entry.grid(row=0, column=4, sticky="ew", padx=10, pady=8)
 
-                threshold_entry = ctk.CTkEntry(row, width=100, justify="center")
+                threshold_entry = ctk.CTkEntry(row, justify="center")
                 threshold_entry.insert(0, f"{Decimal(str(threshold_value)):.2f}")
                 threshold_entry.grid(row=0, column=5, sticky="ew", padx=10, pady=8)
 

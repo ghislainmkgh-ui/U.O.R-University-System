@@ -3506,10 +3506,16 @@ class AdminDashboard(ctk.CTkFrame):
         promo_weights = layout["weights"]
         promo_anchors = layout["anchors"]
         promo_min_widths = layout["min_widths"]
-        self._create_table_header(promo_card, promo_headers, promo_weights, anchors=promo_anchors, min_widths=promo_min_widths, padx=10, pady=10)
+        
+        # Créer un container pour l'en-tête et les données avec le même padding
+        promo_table_container = ctk.CTkFrame(promo_card, fg_color="transparent")
+        promo_table_container.pack(fill="both", expand=True, padx=25, pady=(15, 20))
+        
+        # En-tête avec le même padding que les données
+        self._create_table_header(promo_table_container, promo_headers, promo_weights, anchors=promo_anchors, min_widths=promo_min_widths, padx=10, pady=8)
 
-        promo_scroll = ctk.CTkScrollableFrame(promo_card)
-        promo_scroll.pack(fill="both", expand=True, padx=25, pady=(15, 20))
+        promo_scroll = ctk.CTkScrollableFrame(promo_table_container)
+        promo_scroll.pack(fill="both", expand=True, padx=0, pady=0)
 
         def render_promotions():
             for widget in promo_scroll.winfo_children():
@@ -3536,27 +3542,27 @@ class AdminDashboard(ctk.CTkFrame):
 
                 ctk.CTkLabel(
                     row, text=promo.get('faculty_name') or "-", font=ctk.CTkFont(size=11), text_color=self.colors["text_light"], anchor="center"
-                ).grid(row=0, column=0, sticky="ew", padx=10, pady=6)
+                ).grid(row=0, column=0, sticky="ew", padx=10, pady=8)
 
                 ctk.CTkLabel(
                     row, text=promo.get('name') or "-", font=ctk.CTkFont(size=11), text_color=self.colors["text_dark"], anchor="center"
-                ).grid(row=0, column=1, sticky="ew", padx=10, pady=6)
+                ).grid(row=0, column=1, sticky="ew", padx=10, pady=8)
 
                 ctk.CTkLabel(
                     row, text=promo.get('department_name') or "-", font=ctk.CTkFont(size=11), text_color=self.colors["text_light"], anchor="center"
-                ).grid(row=0, column=2, sticky="ew", padx=10, pady=6)
+                ).grid(row=0, column=2, sticky="ew", padx=10, pady=8)
 
                 ctk.CTkLabel(
                     row, text=str(promo.get('year') or "-"), font=ctk.CTkFont(size=11), text_color=self.colors["text_dark"], anchor="center"
-                ).grid(row=0, column=3, sticky="ew", padx=10, pady=6)
+                ).grid(row=0, column=3, sticky="ew", padx=10, pady=8)
 
                 fee_entry = ctk.CTkEntry(row, width=140, justify="center")
                 fee_entry.insert(0, f"{Decimal(str(fee_value)):.2f}")
-                fee_entry.grid(row=0, column=4, sticky="ew", padx=10, pady=6)
+                fee_entry.grid(row=0, column=4, sticky="ew", padx=10, pady=8)
 
                 threshold_entry = ctk.CTkEntry(row, width=140, justify="center")
                 threshold_entry.insert(0, f"{Decimal(str(threshold_value)):.2f}")
-                threshold_entry.grid(row=0, column=5, sticky="ew", padx=10, pady=6)
+                threshold_entry.grid(row=0, column=5, sticky="ew", padx=10, pady=8)
 
                 def make_save(promotion_id, fee_widget, threshold_widget, save_btn_ref):
                     def _save():
@@ -3673,7 +3679,7 @@ class AdminDashboard(ctk.CTkFrame):
                 save_btn = ctk.CTkButton(
                     row, text="Enregistrer", width=110, fg_color=self.colors["primary"], hover_color="#2563eb", text_color=self.colors["text_white"], command=make_save(promo.get('id'), fee_entry, threshold_entry, None)
                 )
-                save_btn.grid(row=0, column=6, sticky="ew", padx=10, pady=6)
+                save_btn.grid(row=0, column=6, sticky="ew", padx=10, pady=8)
                 
                 # Passer le bouton à la fonction make_save
                 save_btn.configure(command=make_save(promo.get('id'), fee_entry, threshold_entry, save_btn))

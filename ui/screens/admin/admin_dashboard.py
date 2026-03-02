@@ -1682,31 +1682,6 @@ class AdminDashboard(ctk.CTkFrame):
             if not has_students_for_year:
                 self.selected_academic_year_id = None
 
-        # === NAVIGATION ANNÉE ACADÉMIQUE ===
-        year_filter_frame = ctk.CTkFrame(self.content_frame, fg_color=self.colors["hover"], corner_radius=8, height=48)
-        year_filter_frame.pack(fill="x", pady=(0, 6))
-        year_filter_frame.pack_propagate(False)
-
-        ctk.CTkLabel(
-            year_filter_frame, text="📅 Année académique:", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.colors["text_dark"]
-        ).pack(side="left", padx=(15, 10), pady=4)
-
-        academic_years = self.academic_year_service.get_years()
-        year_names = [y.get("year_name") for y in academic_years if y.get("year_name")]
-        self.academic_year_map = {y.get("year_name"): y.get("academic_year_id") for y in academic_years}
-
-        year_filter = ctk.CTkComboBox(
-            year_filter_frame, values=["Toutes Années"] + year_names, width=220, height=30
-        )
-        if self.selected_academic_year_id:
-            current_name = next(
-                (name for name, yid in self.academic_year_map.items() if yid == self.selected_academic_year_id), None
-            )
-            year_filter.set(current_name or "Toutes Années")
-        else:
-            year_filter.set("Toutes Années")
-        year_filter.pack(side="left", padx=(0, 10), pady=4)
-
         # Déterminer le layout compact basé sur la largeur RÉELLE de la zone contenu
         try:
             self.update_idletasks()
@@ -1720,6 +1695,39 @@ class AdminDashboard(ctk.CTkFrame):
         # Seuil légèrement plus large pour tenir compte de la sidebar + paddings
         is_compact_layout = content_width < 1250
         self._students_compact_layout = is_compact_layout
+
+        # === NAVIGATION ANNÉE ACADÉMIQUE ===
+        # Adapter la hauteur pour petit écran
+        filter_height = 36 if is_compact_layout else 48
+        filter_pady = (0, 4) if is_compact_layout else (0, 6)
+        filter_padx = (10, 8) if is_compact_layout else (15, 10)
+        filter_font_size = 10 if is_compact_layout else 12
+        
+        year_filter_frame = ctk.CTkFrame(self.content_frame, fg_color=self.colors["hover"], corner_radius=8, height=filter_height)
+        year_filter_frame.pack(fill="x", pady=filter_pady)
+        year_filter_frame.pack_propagate(False)
+
+        ctk.CTkLabel(
+            year_filter_frame, text="📅 Année académique:", font=ctk.CTkFont(size=filter_font_size, weight="bold"), text_color=self.colors["text_dark"]
+        ).pack(side="left", padx=filter_padx, pady=4)
+
+        academic_years = self.academic_year_service.get_years()
+        year_names = [y.get("year_name") for y in academic_years if y.get("year_name")]
+        self.academic_year_map = {y.get("year_name"): y.get("academic_year_id") for y in academic_years}
+
+        combo_width = 180 if is_compact_layout else 220
+        combo_height = 28 if is_compact_layout else 30
+        year_filter = ctk.CTkComboBox(
+            year_filter_frame, values=["Toutes Années"] + year_names, width=combo_width, height=combo_height
+        )
+        if self.selected_academic_year_id:
+            current_name = next(
+                (name for name, yid in self.academic_year_map.items() if yid == self.selected_academic_year_id), None
+            )
+            year_filter.set(current_name or "Toutes Années")
+        else:
+            year_filter.set("Toutes Années")
+        year_filter.pack(side="left", padx=(0, 10), pady=4)
 
         # === STATS ET BOUTON RESPONSIVE ===
         actions_row = None
@@ -1750,8 +1758,10 @@ class AdminDashboard(ctk.CTkFrame):
             self.students_stats_label.pack(side="left", padx=(10, 10), pady=4)
             add_btn_parent = year_filter_frame
 
+        btn_height = 28 if is_compact_layout else 32
+        btn_text = "➕ Ajouter" if is_compact_layout else f"➕ {self._t('add_student', 'Ajouter étudiant')}"
         add_btn = ctk.CTkButton(
-            add_btn_parent, text=f"➕ {self._t('add_student', 'Ajouter étudiant')}", fg_color=self.colors["primary"], hover_color=self.colors["info"], text_color=self.colors["text_white"], height=32, corner_radius=8, command=self._open_add_student_dialog
+            add_btn_parent, text=btn_text, fg_color=self.colors["primary"], hover_color=self.colors["info"], text_color=self.colors["text_white"], height=btn_height, corner_radius=8, command=self._open_add_student_dialog
         )
         add_btn.pack(side="right", padx=(0, 10) if is_compact_layout else (0, 10), pady=4)
 
@@ -1760,8 +1770,9 @@ class AdminDashboard(ctk.CTkFrame):
             year_filter.configure(state="disabled")
         
         # === BREADCRUMB (Fil d'Ariane) ===
+        breadcrumb_pady = (0, 2) if is_compact_layout else (0, 4)
         self.breadcrumb_frame = ctk.CTkFrame(self.content_frame)
-        self.breadcrumb_frame.pack(fill="x", pady=(0, 4))
+        self.breadcrumb_frame.pack(fill="x", pady=breadcrumb_pady)
         
         # === CONTAINER PRINCIPAL ===
         self.students_main_card = self._create_card(self.content_frame)
@@ -1882,21 +1893,31 @@ class AdminDashboard(ctk.CTkFrame):
     
     def _show_faculties_view(self):
         """Affiche les cartes des facultés"""
-        # Titre
+        is_compact = self._students_compact_layout if hasattr(self, '_students_compact_layout') else False
+        
+        # Titre - réduit sur petits écrans
+        title_padx = 15 if is_compact else 25
+        title_pady = (4, 4) if is_compact else (6, 6)
+        title_font = 16 if is_compact else 20
+        
         title_frame = ctk.CTkFrame(self.students_main_card)
-        title_frame.pack(fill="x", padx=25, pady=(6, 6))
+        title_frame.pack(fill="x", padx=title_padx, pady=title_pady)
         
         ctk.CTkLabel(
-            title_frame, text="🏛️ Sélectionnez une Faculté", font=ctk.CTkFont(size=20, weight="bold"), text_color=self.colors["text_dark"]
+            title_frame, text="🏛️ Sélectionnez une Faculté", font=ctk.CTkFont(size=title_font, weight="bold"), text_color=self.colors["text_dark"]
         ).pack(anchor="w")
         
+        # Toujours afficher le sous-titre pour clarifier l'action
+        subtitle_font = 10 if is_compact else 12
         ctk.CTkLabel(
-            title_frame, text="Cliquez sur une faculté pour voir ses départements", font=ctk.CTkFont(size=12), text_color=self.colors["text_light"]
-        ).pack(anchor="w", pady=(5, 0))
+            title_frame, text="Cliquez sur une faculté pour voir ses départements", font=ctk.CTkFont(size=subtitle_font), text_color=self.colors["text_light"]
+        ).pack(anchor="w", pady=(3 if is_compact else 5, 0))
         
-        # Scroll frame pour les cartes
+        # Scroll frame pour les cartes - plus d'espace sur petits écrans
+        scroll_padx = 15 if is_compact else 25
+        scroll_pady = (0, 10) if is_compact else (0, 20)
         scroll_frame = ctk.CTkScrollableFrame(self.students_main_card)
-        scroll_frame.pack(fill="both", expand=True, padx=25, pady=(0, 20))
+        scroll_frame.pack(fill="both", expand=True, padx=scroll_padx, pady=scroll_pady)
         
         # Regrouper les étudiants par faculté
         faculties_data = {}
@@ -1914,26 +1935,33 @@ class AdminDashboard(ctk.CTkFrame):
                 }
             faculties_data[faculty_id]['students'].append(student)
         
-        # Créer les cartes
+        # Check si pas de facultés
         if not faculties_data:
             ctk.CTkLabel(
                 scroll_frame, text="Aucune faculté trouvée", font=ctk.CTkFont(size=14), text_color=self.colors["text_light"]
             ).pack(pady=50)
             return
         
-        # Grille de cartes (2 colonnes)
+        # Créer les cartes - plus compactes sur petits écrans
+        card_pady = 5 if is_compact else 8
+        card_padx = 12 if is_compact else 20
+        card_pady_internal = 10 if is_compact else 15
+        icon_size = 24 if is_compact else 32
+        icon_padx = 10 if is_compact else 15
+        name_font = 14 if is_compact else 16
+        
         for idx, (faculty_id, faculty_info) in enumerate(sorted(faculties_data.items(), key=lambda x: x[1]['name'])):
             card = ctk.CTkFrame(
                 scroll_frame, fg_color=self.colors["card_bg"], corner_radius=12, cursor="hand2", border_width=1, border_color=self.colors["border"]
             )
-            card.pack(fill="x", pady=8)
+            card.pack(fill="x", pady=card_pady)
             
             # Bind click event
             card.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
             
             # Contenu de la carte
             content_frame = ctk.CTkFrame(card, fg_color=self.colors["card_bg"])
-            content_frame.pack(fill="both", expand=True, padx=20, pady=15)
+            content_frame.pack(fill="both", expand=True, padx=card_padx, pady=card_pady_internal)
             content_frame.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
             
             # Header
@@ -1942,9 +1970,9 @@ class AdminDashboard(ctk.CTkFrame):
             header_frame.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
             
             icon_label = ctk.CTkLabel(
-                header_frame, text="🏛️", font=ctk.CTkFont(size=32), fg_color=self.colors["card_bg"]
+                header_frame, text="🏛️", font=ctk.CTkFont(size=icon_size), fg_color=self.colors["card_bg"]
             )
-            icon_label.pack(side="left", padx=(0, 15))
+            icon_label.pack(side="left", padx=(0, icon_padx))
             icon_label.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
             
             info_frame = ctk.CTkFrame(header_frame, fg_color=self.colors["card_bg"])
@@ -1952,7 +1980,7 @@ class AdminDashboard(ctk.CTkFrame):
             info_frame.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
             
             name_label = ctk.CTkLabel(
-                info_frame, text=faculty_info['name'], font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_dark"], anchor="w", fg_color=self.colors["card_bg"]
+                info_frame, text=faculty_info['name'], font=ctk.CTkFont(size=name_font, weight="bold"), text_color=self.colors["text_dark"], anchor="w", fg_color=self.colors["card_bg"]
             )
             name_label.pack(anchor="w")
             name_label.bind("<Button-1>", lambda e, f=faculty_info: self._select_faculty(f))
@@ -1979,21 +2007,30 @@ class AdminDashboard(ctk.CTkFrame):
         if not self.nav_state['selected_faculty']:
             return
         
+        is_compact = self._students_compact_layout if hasattr(self, '_students_compact_layout') else False
+        
         # Titre
         title_frame = ctk.CTkFrame(self.students_main_card)
-        title_frame.pack(fill="x", padx=25, pady=(20, 15))
+        title_padx = 15 if is_compact else 25
+        title_pady = (10, 8) if is_compact else (20, 15)
+        title_frame.pack(fill="x", padx=title_padx, pady=title_pady)
         
+        title_font = 16 if is_compact else 20
         ctk.CTkLabel(
-            title_frame, text=f"📂 Départements de {self.nav_state['selected_faculty']['name']}", font=ctk.CTkFont(size=20, weight="bold"), text_color=self.colors["text_dark"]
+            title_frame, text=f"📂 Départements de {self.nav_state['selected_faculty']['name']}", font=ctk.CTkFont(size=title_font, weight="bold"), text_color=self.colors["text_dark"]
         ).pack(anchor="w")
         
+        # Toujours afficher le sous-titre
+        subtitle_font = 10 if is_compact else 12
         ctk.CTkLabel(
-            title_frame, text="Cliquez sur un département pour voir ses promotions", font=ctk.CTkFont(size=12), text_color=self.colors["text_light"]
-        ).pack(anchor="w", pady=(5, 0))
+            title_frame, text="Cliquez sur un département pour voir ses promotions", font=ctk.CTkFont(size=subtitle_font), text_color=self.colors["text_light"]
+        ).pack(anchor="w", pady=(3 if is_compact else 5, 0))
         
         # Scroll frame
         scroll_frame = ctk.CTkScrollableFrame(self.students_main_card)
-        scroll_frame.pack(fill="both", expand=True, padx=25, pady=(0, 20))
+        scroll_padx = 15 if is_compact else 25
+        scroll_pady = (0, 10) if is_compact else (0, 20)
+        scroll_frame.pack(fill="both", expand=True, padx=scroll_padx, pady=scroll_pady)
         
         # Regrouper par département
         departments_data = {}
@@ -2023,17 +2060,24 @@ class AdminDashboard(ctk.CTkFrame):
             return
         
         # Créer les cartes
+        card_pady = 5 if is_compact else 8
+        content_padx = 12 if is_compact else 20
+        content_pady = 10 if is_compact else 15
+        icon_size = 24 if is_compact else 32
+        name_font = 14 if is_compact else 16
+        stats_pady = (8, 0) if is_compact else (10, 0)
+        
         for dept_id, dept_info in sorted(departments_data.items(), key=lambda x: x[1]['name']):
             card = ctk.CTkFrame(
                 scroll_frame, fg_color=self.colors["card_bg"], corner_radius=12, cursor="hand2", border_width=1, border_color=self.colors["border"]
             )
-            card.pack(fill="x", pady=8)
+            card.pack(fill="x", pady=card_pady)
             
             card.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
             
             # Contenu
             content_frame = ctk.CTkFrame(card)
-            content_frame.pack(fill="both", expand=True, padx=20, pady=15)
+            content_frame.pack(fill="both", expand=True, padx=content_padx, pady=content_pady)
             content_frame.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
             
             # Header
@@ -2042,7 +2086,7 @@ class AdminDashboard(ctk.CTkFrame):
             header_frame.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
             
             icon_label = ctk.CTkLabel(
-                header_frame, text="📂", font=ctk.CTkFont(size=32)
+                header_frame, text="📂", font=ctk.CTkFont(size=icon_size)
             )
             icon_label.pack(side="left", padx=(0, 15))
             icon_label.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
@@ -2052,7 +2096,7 @@ class AdminDashboard(ctk.CTkFrame):
             info_frame.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
             
             name_label = ctk.CTkLabel(
-                info_frame, text=dept_info['name'], font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_dark"], anchor="w"
+                info_frame, text=dept_info['name'], font=ctk.CTkFont(size=name_font, weight="bold"), text_color=self.colors["text_dark"], anchor="w"
             )
             name_label.pack(anchor="w")
             name_label.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
@@ -2068,7 +2112,7 @@ class AdminDashboard(ctk.CTkFrame):
             eligible_count = sum(1 for s in dept_info['students'] if s.get('is_eligible'))
             
             stats_frame = ctk.CTkFrame(content_frame)
-            stats_frame.pack(fill="x", pady=(10, 0))
+            stats_frame.pack(fill="x", pady=stats_pady)
             stats_frame.bind("<Button-1>", lambda e, d=dept_info: self._select_department(d))
             
             self._create_stat_badge(stats_frame, "👥", f"{students_count} étudiants", self.colors["info"]).pack(side="left", padx=(0, 10))
@@ -2079,37 +2123,53 @@ class AdminDashboard(ctk.CTkFrame):
         if not self.nav_state['selected_department']:
             return
         
-        # Titre avec barre de recherche
+        # Titre avec barre de recherche - compact sur petits écrans
+        is_compact = self._students_compact_layout if hasattr(self, '_students_compact_layout') else False
+        title_padx = 15 if is_compact else 25
+        title_pady = (10, 8) if is_compact else (20, 15)
+        title_font = 16 if is_compact else 20
+        subtitle_font = 10 if is_compact else 12
+        
         title_frame = ctk.CTkFrame(self.students_main_card)
-        title_frame.pack(fill="x", padx=25, pady=(20, 15))
+        title_frame.pack(fill="x", padx=title_padx, pady=title_pady)
         
         left_frame = ctk.CTkFrame(title_frame)
         left_frame.pack(side="left", fill="x", expand=True)
         
         ctk.CTkLabel(
-            left_frame, text=f"🎓 Promotions - {self.nav_state['selected_department']['name']}", font=ctk.CTkFont(size=20, weight="bold"), text_color=self.colors["text_dark"]
+            left_frame, text=f"🎓 Promotions - {self.nav_state['selected_department']['name']}", font=ctk.CTkFont(size=title_font, weight="bold"), text_color=self.colors["text_dark"]
         ).pack(anchor="w")
         
+        # Toujours afficher le sous-titre, même sur petits écrans
         ctk.CTkLabel(
-            left_frame, text="Liste des étudiants par promotion", font=ctk.CTkFont(size=12), text_color=self.colors["text_light"]
-        ).pack(anchor="w", pady=(5, 0))
+            left_frame, text="Liste des étudiants par promotion", font=ctk.CTkFont(size=subtitle_font), text_color=self.colors["text_light"]
+        ).pack(anchor="w", pady=(3 if is_compact else 5, 0))
         
-        # Barre de recherche
-        search_frame = ctk.CTkFrame(self.students_main_card, fg_color=self.colors["hover"], corner_radius=8, height=44)
-        search_frame.pack(fill="x", padx=25, pady=(0, 6))
+        # Barre de recherche - plus compacte sur petits écrans
+        search_height = 36 if is_compact else 44
+        search_padx = 15 if is_compact else 25
+        search_pady = (0, 4) if is_compact else (0, 6)
+        
+        search_frame = ctk.CTkFrame(self.students_main_card, fg_color=self.colors["hover"], corner_radius=8, height=search_height)
+        search_frame.pack(fill="x", padx=search_padx, pady=search_pady)
         search_frame.pack_propagate(False)
         
         ctk.CTkLabel(
             search_frame, text="🔍", font=ctk.CTkFont(size=14)
         ).pack(side="left", padx=(15, 5), pady=8)
         
+        search_placeholder = "Rechercher..." if is_compact else "Rechercher un étudiant (nom, email...)..."
+        search_entry_height = 28 if is_compact else 30
         search_entry = ctk.CTkEntry(
-            search_frame, placeholder_text="Rechercher un étudiant (nom, email...)...", height=30, border_width=0)
-        search_entry.pack(side="left", fill="x", expand=True, padx=(5, 15), pady=4)
+            search_frame, placeholder_text=search_placeholder, height=search_entry_height, border_width=0)
+        search_entry.pack(side="left", fill="x", expand=True, padx=(5, 10 if is_compact else 15), pady=4)
         
-        # Scroll frame
+        # Scroll frame - plus d'espace disponible sur petits écrans
+        scroll_padx = 15 if is_compact else 25
+        scroll_pady = (0, 6) if is_compact else (0, 10)
+        
         scroll_frame = ctk.CTkScrollableFrame(self.students_main_card)
-        scroll_frame.pack(fill="both", expand=True, padx=25, pady=(0, 10))
+        scroll_frame.pack(fill="both", expand=True, padx=scroll_padx, pady=scroll_pady)
         
         # Regrouper par promotion
         promotions_data = {}
@@ -2164,26 +2224,40 @@ class AdminDashboard(ctk.CTkFrame):
                 if not filtered_students:
                     continue
                 
-                # En-tête de promotion
-                promo_header = ctk.CTkFrame(content_parent, fg_color=self.colors["primary"], corner_radius=8)
-                promo_header.pack(fill="x", pady=(0 if promo_id == list(promotions_data.keys())[0] else 15, 8))
+                # En-tête de promotion - meilleure lisibilité
+                promo_pady_top = 0 if promo_id == list(promotions_data.keys())[0] else (8 if is_compact else 15)
+                promo_pady_bottom = 5 if is_compact else 8
+                promo_padx = 10 if is_compact else 15
                 
+                # Utiliser un fond plus foncé pour meilleur contraste
+                promo_bg = self.colors["text_dark"] if self.theme.current_theme == "light" else self.colors["primary"]
+                promo_header = ctk.CTkFrame(content_parent, fg_color=promo_bg, corner_radius=8)
+                promo_header.pack(fill="x", pady=(promo_pady_top, promo_pady_bottom), padx=promo_padx)
+                
+                promo_header_padx = 10 if is_compact else 15
+                promo_header_pady = 6 if is_compact else 10
                 promo_header_content = ctk.CTkFrame(promo_header)
-                promo_header_content.pack(fill="x", padx=15, pady=10)
+                promo_header_content.pack(fill="x", padx=promo_header_padx, pady=promo_header_pady)
                 
+                # Tailles de police augmentées pour meilleure lisibilité
+                promo_title_font = 13 if is_compact else 14
                 ctk.CTkLabel(
-                    promo_header_content, text=f"🎓 {promo_info['name']} ({promo_info['year']})", font=ctk.CTkFont(size=14, weight="bold"), text_color=self.colors["text_white"]
+                    promo_header_content, text=f"🎓 {promo_info['name']} ({promo_info['year']})", font=ctk.CTkFont(size=promo_title_font, weight="bold"), text_color=self.colors["text_white"]
                 ).pack(side="left")
                 
-                # Stats promotion
+                # Stats promotion - lisibles même sur petits écrans
+                stats_font = 11 if is_compact else 11
+                stats_text = f"👥 {len(filtered_students)} | 💰 ${promo_info['fee']:.0f} | Seuil: ${promo_info['threshold']:.0f}" if is_compact else f"👥 {len(filtered_students)} étudiant{'s' if len(filtered_students) > 1 else ''} | 💰 Frais: ${promo_info['fee']:.2f} | Seuil: ${promo_info['threshold']:.2f}"
                 stats_label = ctk.CTkLabel(
-                    promo_header_content, text=f"👥 {len(filtered_students)} étudiant{'s' if len(filtered_students) > 1 else ''} | 💰 Frais: ${promo_info['fee']:.2f} | Seuil: ${promo_info['threshold']:.2f}", font=ctk.CTkFont(size=11), text_color=self.colors["text_white"]
+                    promo_header_content, text=stats_text, font=ctk.CTkFont(size=stats_font), text_color=self.colors["text_white"]
                 )
                 stats_label.pack(side="right")
                 
-                # Tableau des étudiants
+                # Tableau des étudiants - plus d'espace sur petits écrans
+                table_pady = (0, 6) if is_compact else (0, 10)
+                table_padx = 10 if is_compact else 15
                 table_frame = ctk.CTkFrame(content_parent, fg_color=self.colors["card_bg"], corner_radius=8)
-                table_frame.pack(fill="x", expand=False, pady=(0, 10))
+                table_frame.pack(fill="x", expand=False, pady=table_pady, padx=table_padx)
                 
                 # Header du tableau
                 headers = ["Photo", "Nom Complet", "Email", "💰 Payé", "Éligibilité", "Solde ($)", "Actions"]
@@ -2191,13 +2265,17 @@ class AdminDashboard(ctk.CTkFrame):
                 column_weights = layout["weights"]
                 header_anchors = layout["anchors"]
                 min_widths = layout["min_widths"]
-                self._create_table_header(table_frame, headers, column_weights, anchors=header_anchors, min_widths=min_widths, padx=10, pady=8)
+                
+                header_pady = 6 if is_compact else 8
+                self._create_table_header(table_frame, headers, column_weights, anchors=header_anchors, min_widths=min_widths, padx=10, pady=header_pady)
 
-                # Conteneur scrollable des lignes (header fixe)
+                # Conteneur scrollable des lignes - plus de hauteur sur petits écrans
+                table_height = self._scaled(320) if is_compact else self._scaled(260)
                 rows_scroll = ctk.CTkScrollableFrame(
-                    table_frame, height=self._scaled(260), scrollbar_button_color=self.colors["border"], scrollbar_button_hover_color=self.colors["text_light"]
+                    table_frame, height=table_height, scrollbar_button_color=self.colors["border"], scrollbar_button_hover_color=self.colors["text_light"]
                 )
-                rows_scroll.pack(fill="x", padx=0, pady=(0, 8))
+                bottom_pady = 4 if is_compact else 8
+                rows_scroll.pack(fill="x", padx=0, pady=(0, bottom_pady))
 
                 self._set_scrollbar_visible(rows_scroll, False)
 
@@ -3190,21 +3268,22 @@ class AdminDashboard(ctk.CTkFrame):
         except Exception:
             return
     
-    def _show_finance(self):
-        """Affiche la page Finances"""
+    def _show_finance(self, filter_category="all"):
+        """Affiche la page Finances
+        
+        Args:
+            filter_category: Filtre à appliquer ("all", "paid", "partial", "unpaid")
+        """
         self.current_view = "finance"
         self._clear_content()
         self._update_nav_buttons("finance")
         self.title_label.configure(text=self._t("finance_title", "Gestion Financière"))
         self.subtitle_label.configure(text=self._t("finance_subtitle", "Suivi des paiements et seuils"))
         
-        # === HEADER ===
-        header = ctk.CTkFrame(self.content_frame)
-        header.pack(fill="x", pady=(0, 20))
-        
-        ctk.CTkLabel(
-            header, text="💰 Gestion Financière", font=ctk.CTkFont(size=24, weight="bold"), text_color=self.colors["text_dark"]
-        ).pack(side="left")
+        # Sauvegarder le filtre actuel
+        if not hasattr(self, '_finance_filter'):
+            self._finance_filter = "all"
+        self._finance_filter = filter_category
         
         # === KPIs FINANCIERS ===
         kpi_frame = ctk.CTkFrame(self.content_frame)
@@ -3216,32 +3295,64 @@ class AdminDashboard(ctk.CTkFrame):
             payment_status = {"never_paid": 0, "partial_paid": 0, "eligible": 0}
         
         kpis = [
-            (self._format_usd(revenue), "Revenus Totaux", "green"), (f"{payment_status['eligible']}", "Paiements Complètes", "blue"), (f"{payment_status['partial_paid']}", "Paiements Partiels", "orange"), (f"{payment_status['never_paid']}", "Non Payés", "red"), ]
+            (self._format_usd(revenue), "Revenus Totaux", "green", "all"), 
+            (f"{payment_status['eligible']}", "Paiements Complètes", "blue", "paid"), 
+            (f"{payment_status['partial_paid']}", "Paiements Partiels", "orange", "partial"), 
+            (f"{payment_status['never_paid']}", "Non Payés", "red", "unpaid"),
+        ]
         
         # Responsive: layout horizontal ou vertical selon écran
         is_small_screen = self.screen_width < 1000
         kpi_layout_side = "top" if is_small_screen else "left"  # Vertical si petit écran
         
-        for i, (value, label, color_key) in enumerate(kpis):
+        for i, (value, label, color_key, category) in enumerate(kpis):
             color_map = {"green": self.colors["success"], "blue": self.colors["info"], "orange": self.colors["warning"], "red": self.colors["danger"]}
-            kpi_card = ctk.CTkFrame(kpi_frame, fg_color=color_map[color_key], corner_radius=8, height=80 if is_small_screen else 100)
+            
+            # Bordure pour indiquer la carte active
+            border_width = 3 if category == filter_category else 0
+            border_color = "#ffffff" if category == filter_category else color_map[color_key]
+            
+            kpi_card = ctk.CTkFrame(
+                kpi_frame, 
+                fg_color=color_map[color_key], 
+                corner_radius=8, 
+                height=80 if is_small_screen else 100,
+                border_width=border_width,
+                border_color=border_color
+            )
             kpi_card.pack(side=kpi_layout_side, fill="both", expand=True, padx=(0 if i == 0 else 3), pady=(0 if i == 0 else 3))
             kpi_card.pack_propagate(False)
-            self._make_card_clickable(kpi_card, self._show_finance)
+            
+            # Rendre la carte cliquable avec le filtre approprié
+            kpi_card.configure(cursor="hand2")
+            kpi_card.bind("<Button-1>", lambda e, cat=category: self._show_finance(cat))
             
             # Adaptive font sizes
             value_font_size = 16 if is_small_screen else 20
             label_font_size = 8 if is_small_screen else 10
             
-            ctk.CTkLabel(kpi_card, text=value, font=ctk.CTkFont(size=value_font_size, weight="bold"), text_color=self.colors["text_white"]).pack(expand=True)
-            ctk.CTkLabel(kpi_card, text=label, font=ctk.CTkFont(size=label_font_size), text_color=self.colors["text_white"]).pack()
+            value_label = ctk.CTkLabel(kpi_card, text=value, font=ctk.CTkFont(size=value_font_size, weight="bold"), text_color=self.colors["text_white"])
+            value_label.pack(expand=True)
+            value_label.bind("<Button-1>", lambda e, cat=category: self._show_finance(cat))
+            
+            label_widget = ctk.CTkLabel(kpi_card, text=label, font=ctk.CTkFont(size=label_font_size), text_color=self.colors["text_white"])
+            label_widget.pack()
+            label_widget.bind("<Button-1>", lambda e, cat=category: self._show_finance(cat))
         
         # === TABLEAU PAIEMENTS ===
         table_card = self._create_card(self.content_frame)
         table_card.pack(fill="both", expand=True)
         
+        # Titre avec indication du filtre actif
+        filter_labels = {
+            "all": "📊 Historique des Paiements - Tous",
+            "paid": "📊 Historique des Paiements - Payés Complètement",
+            "partial": "📊 Historique des Paiements - Paiements Partiels",
+            "unpaid": "📊 Historique des Paiements - Non Payés"
+        }
+        
         ctk.CTkLabel(
-            table_card, text="📊 Historique des Paiements", font=ctk.CTkFont(size=18, weight="bold"), text_color=self.colors["text_dark"]
+            table_card, text=filter_labels.get(filter_category, filter_labels["all"]), font=ctk.CTkFont(size=18, weight="bold"), text_color=self.colors["text_dark"]
         ).pack(anchor="w", padx=25, pady=(20, 15))
         
         # Tableau header
@@ -3262,8 +3373,37 @@ class AdminDashboard(ctk.CTkFrame):
                 scroll_frame, text="Aucun paiement trouvé.", font=ctk.CTkFont(size=12), text_color=self.colors["text_light"]
             ).pack(pady=20)
             return
-
+        
+        # Filtrer les paiements selon la catégorie sélectionnée
+        filtered_payments = []
         for payment in payments:
+            # Gérer les valeurs NULL de la base de données
+            amount_paid_raw = payment.get('amount_paid')
+            amount_paid = Decimal(str(amount_paid_raw)) if amount_paid_raw is not None else Decimal('0')
+            is_eligible = payment.get('is_eligible')
+            
+            # Déterminer le statut (même logique que get_students_by_payment_status)
+            # NULL ou 0 = non payé
+            if amount_paid_raw is None or amount_paid == 0:
+                payment_status = "unpaid"
+            elif amount_paid > 0 and (is_eligible is None or is_eligible == 0):
+                payment_status = "partial"
+            else:  # is_eligible == 1
+                payment_status = "paid"
+            
+            # Appliquer le filtre
+            if filter_category == "all" or filter_category == payment_status:
+                filtered_payments.append(payment)
+        
+        # Afficher un message si aucun résultat
+        if not filtered_payments:
+            ctk.CTkLabel(
+                scroll_frame, text=f"Aucun étudiant dans cette catégorie.", font=ctk.CTkFont(size=12), text_color=self.colors["text_light"]
+            ).pack(pady=20)
+            return
+        
+        # Afficher les paiements filtrés
+        for payment in filtered_payments:
             row = ctk.CTkFrame(scroll_frame, fg_color=self.colors["hover"], corner_radius=6)
             row.pack(fill="x", pady=4)
 

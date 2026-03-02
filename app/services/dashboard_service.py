@@ -239,27 +239,34 @@ class DashboardService:
             db = self.db_connection.get_connection()
             cursor = db.cursor()
 
-            # Jamais payé
+            # Jamais payé (inclut les étudiants sans finance_profile)
             cursor.execute("""
-                SELECT COUNT(DISTINCT pf.student_id)
-                FROM finance_profile pf
-                WHERE pf.amount_paid = 0
+                SELECT COUNT(DISTINCT s.id)
+                FROM student s
+                LEFT JOIN finance_profile fp ON fp.student_id = s.id
+                WHERE s.is_active = 1 
+                AND (fp.amount_paid IS NULL OR fp.amount_paid = 0)
             """)
             never_paid = cursor.fetchone()[0]
 
             # Partiellement payé
             cursor.execute("""
-                SELECT COUNT(DISTINCT pf.student_id)
-                FROM finance_profile pf
-                WHERE pf.amount_paid > 0 AND pf.is_eligible = 0
+                SELECT COUNT(DISTINCT s.id)
+                FROM student s
+                INNER JOIN finance_profile fp ON fp.student_id = s.id
+                WHERE s.is_active = 1
+                AND fp.amount_paid > 0 
+                AND (fp.is_eligible IS NULL OR fp.is_eligible = 0)
             """)
             partial_paid = cursor.fetchone()[0]
 
             # Éligible
             cursor.execute("""
-                SELECT COUNT(DISTINCT pf.student_id)
-                FROM finance_profile pf
-                WHERE pf.is_eligible = 1
+                SELECT COUNT(DISTINCT s.id)
+                FROM student s
+                INNER JOIN finance_profile fp ON fp.student_id = s.id
+                WHERE s.is_active = 1
+                AND fp.is_eligible = 1
             """)
             eligible = cursor.fetchone()[0]
 

@@ -157,10 +157,11 @@ class AcademicYearService:
         """Ajoute une période d'examen"""
         try:
             query = """
-                INSERT INTO exam_period (academic_year_id, name, start_date, end_date)
+                INSERT INTO exam_period (academic_year_id, period_name, start_date, end_date)
                 VALUES (%s, %s, %s, %s)
             """
             self.db.execute_update(query, (academic_year_id, name, start_date, end_date))
+            logger.info(f"Exam period '{name}' added for year {academic_year_id}")
             return True
         except Exception as e:
             logger.error(f"Error adding exam period: {e}")

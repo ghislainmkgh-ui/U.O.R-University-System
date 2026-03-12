@@ -3850,50 +3850,18 @@ class AdminDashboard(ctk.CTkFrame):
         render_promotions()
         faculty_filter.configure(command=lambda _value: render_promotions())
         
-        # === Section: Périodes d'Examens ===
+        # === Section: Périodes d'Examens (Bouton) ===
         exam_card = self._create_card(self.content_frame)
-        exam_card.pack(fill="both", expand=True)
+        exam_card.pack(fill="both", expand=True, pady=(15, 0))
         
-        ctk.CTkLabel(
-            exam_card, text="📅 Périodes d'Examens", font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=25, pady=(20, 15))
+        exam_btn_frame = ctk.CTkFrame(exam_card, fg_color="transparent")
+        exam_btn_frame.pack(fill="x", padx=25, pady=20)
         
-        if active_year:
-            exam_periods = self.academic_year_service.get_exam_periods(active_year['academic_year_id'])
-            
-            if exam_periods:
-                # Tableau des périodes
-                headers = ["Période", "Début", "Fin", "Durée"]
-                layout = self._get_table_layout("exam_periods", len(headers))
-                column_weights = layout["weights"]
-                header_anchors = layout["anchors"]
-                min_widths = layout["min_widths"]
-                self._create_table_header(exam_card, headers, column_weights, anchors=header_anchors, min_widths=min_widths, padx=10, pady=10)
-                
-                # Liste des périodes
-                scroll_frame = ctk.CTkScrollableFrame(exam_card)
-                scroll_frame.pack(fill="both", expand=True, padx=25, pady=(15, 20))
-                
-                for period in exam_periods:
-                    start = datetime.strptime(str(period['start_date']), "%Y-%m-%d")
-                    end = datetime.strptime(str(period['end_date']), "%Y-%m-%d")
-                    duration = (end - start).days
-                    
-                    row = ctk.CTkFrame(scroll_frame, fg_color=self.colors["hover"], corner_radius=6)
-                    row.pack(fill="x", pady=4)
-
-                    self._configure_table_columns(row, column_weights, min_widths=min_widths)
-                    row_values = [period['period_name'], start.strftime("%d/%m/%Y"), end.strftime("%d/%m/%Y"), f"{duration} jours"]
-                    row_colors = [self.colors["text_dark"], self.colors["text_light"], self.colors["text_light"], self.colors["info"]]
-                    row_weights = ["bold", "normal", "normal", "bold"]
-                    row_anchors = ["w", "center", "center", "e"]
-                    self._populate_table_row(
-                        row, row_values, column_weights, text_colors=row_colors, font_weights=row_weights, anchors=row_anchors, min_widths=min_widths
-                    )
-            else:
-                ctk.CTkLabel(exam_card, text="❌ Aucune période d'examens définie", font=ctk.CTkFont(size=12), text_color=self.colors["warning"]).pack(anchor="w", padx=25, pady=20)
-        else:
-            ctk.CTkLabel(exam_card, text="❌ Créez une année académique d'abord", font=ctk.CTkFont(size=12), text_color=self.colors["danger"]).pack(anchor="w", padx=25, pady=20)
+        ctk.CTkButton(
+            exam_btn_frame, text="📅 Gérer les Périodes d'Examens", font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color=self.colors["primary"], hover_color=self.colors["info"], text_color=self.colors["text_white"],
+            height=45, corner_radius=8, command=lambda: self._run_with_loading(self._show_exam_periods)
+        ).pack(fill="x", expand=True)
     
     def _update_thresholds(self, new_threshold_str, new_fee_str, academic_year_id):
         """Met à jour les seuils financiers et notifie tous les étudiants"""
@@ -4053,6 +4021,447 @@ class AdminDashboard(ctk.CTkFrame):
         except (ValueError, TypeError):
             messagebox.showerror("Erreur", "Veuillez entrer des montants valides (nombres)")
     
+    # ==================== EXAM PERIODS MANAGEMENT ====================
+    
+    def _show_exam_periods(self):
+        """Vue dédiée et responsif pour gérer les périodes d'examens"""
+        self.current_view = "exam_periods"
+        self._clear_content()
+        self._update_nav_buttons("academic_years")
+        self.title_label.configure(text="📅 Gestion des Périodes d'Examens")
+        self.subtitle_label.configure(text="Créez et organisez les sessions d'examen pour l'année académique")
+        
+        active_year = self.academic_year_service.get_active_year()
+        if not active_year:
+            ctk.CTkLabel(
+                self.content_frame, text="❌ Aucune année académique active", 
+                font=ctk.CTkFont(size=14), text_color=self.colors["danger"]
+            ).pack(pady=30)
+            return
+        
+        # Déterminer layout responsif
+        self.update_idletasks()
+        content_width = self.content_frame.winfo_width() if self.content_frame else 800
+        is_compact = content_width < 900
+        
+        # === CARD 1: Formulaire d'ajout ===
+        form_card = self._create_card(self.content_frame)
+        form_card.pack(fill="x", padx=0, pady=(0, 15))
+        
+        ctk.CTkLabel(
+            form_card, text="➕ Ajouter une Période d'Examen", 
+            font=ctk.CTkFont(size=14, weight="bold"), text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=20, pady=(15, 10))
+        
+        # Formulaire adaptif
+        form_frame = ctk.CTkFrame(form_card, fg_color="transparent")
+        form_frame.pack(fill="x", padx=20, pady=(0, 15))
+        
+        if is_compact:
+            # Layout vertical sur petit écran
+            ctk.CTkLabel(form_frame, text="Nom de la période:", font=ctk.CTkFont(size=10), text_color=self.colors["text_light"]).pack(anchor="w", pady=(0, 3))
+            period_name_entry = ctk.CTkEntry(form_frame, placeholder_text="Ex: Session 1 - Janvier 2026", width=300)
+            period_name_entry.pack(fill="x", pady=(0, 10))
+            
+            date_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+            date_frame.pack(fill="x", pady=(0, 10))
+            
+            ctk.CTkLabel(date_frame, text="Date début:", font=ctk.CTkFont(size=10), text_color=self.colors["text_light"]).pack(anchor="w", pady=(0, 3))
+            start_entry = ctk.CTkEntry(date_frame, placeholder_text="AAAA-MM-JJ", width=150)
+            start_entry.pack(side="left", padx=(0, 10))
+            
+            ctk.CTkLabel(date_frame, text="Date fin:", font=ctk.CTkFont(size=10), text_color=self.colors["text_light"]).pack(anchor="w", side="left", padx=(10, 0), pady=(0, 3))
+            end_entry = ctk.CTkEntry(date_frame, placeholder_text="AAAA-MM-JJ", width=150)
+            end_entry.pack(side="left", padx=(0, 10))
+        else:
+            # Layout horizontal sur grand écran
+            ctk.CTkLabel(form_frame, text="Nom:", font=ctk.CTkFont(size=11, weight="bold"), text_color=self.colors["text_dark"]).pack(side="left", padx=(0, 10))
+            period_name_entry = ctk.CTkEntry(form_frame, placeholder_text="Ex: Session 1 - Janvier 2026", width=250)
+            period_name_entry.pack(side="left", padx=(0, 20))
+            
+            ctk.CTkLabel(form_frame, text="Début:", font=ctk.CTkFont(size=11, weight="bold"), text_color=self.colors["text_dark"]).pack(side="left", padx=(0, 10))
+            start_entry = ctk.CTkEntry(form_frame, placeholder_text="AAAA-MM-JJ", width=130)
+            start_entry.pack(side="left", padx=(0, 20))
+            
+            ctk.CTkLabel(form_frame, text="Fin:", font=ctk.CTkFont(size=11, weight="bold"), text_color=self.colors["text_dark"]).pack(side="left", padx=(0, 10))
+            end_entry = ctk.CTkEntry(form_frame, placeholder_text="AAAA-MM-JJ", width=130)
+            end_entry.pack(side="left", padx=(0, 20))
+        
+        def add_exam_period():
+            name = period_name_entry.get().strip()
+            start_str = start_entry.get().strip()
+            end_str = end_entry.get().strip()
+            
+            if not all([name, start_str, end_str]):
+                messagebox.showerror("Erreur", "Tous les champs sont requis.")
+                return
+            
+            try:
+                start_dt = datetime.strptime(start_str, "%Y-%m-%d").date()
+                end_dt = datetime.strptime(end_str, "%Y-%m-%d").date()
+                if end_dt < start_dt:
+                    messagebox.showerror("Erreur", "La date de fin doit être après le début.")
+                    return
+            except ValueError:
+                messagebox.showerror("Erreur", "Format de date invalide. Utilisez AAAA-MM-JJ")
+                return
+            
+            # Ajouter la période et notifier les étudiants
+            success = self.academic_year_service.add_exam_period(
+                active_year['academic_year_id'], name, start_dt, end_dt
+            )
+            
+            if success:
+                # Afficher dialogue de progression
+                progress_dialog = ctk.CTkToplevel(self)
+                progress_dialog.title("📬 Envoi des Notifications")
+                progress_dialog.geometry("400x150")
+                
+                # Centrer la fenêtre sur la fenêtre parent
+                progress_dialog.update_idletasks()
+                parent_x = self.winfo_x()
+                parent_y = self.winfo_y()
+                parent_w = self.winfo_width()
+                parent_h = self.winfo_height()
+                dialog_w = progress_dialog.winfo_width()
+                dialog_h = progress_dialog.winfo_height()
+                x = parent_x + (parent_w - dialog_w) // 2
+                y = parent_y + (parent_h - dialog_h) // 2
+                progress_dialog.geometry(f"400x150+{x}+{y}")
+                
+                progress_dialog.grab_set()
+                progress_dialog.resizable(False, False)
+                
+                ctk.CTkLabel(
+                    progress_dialog, text="📬 Envoi des notifications aux étudiants...",
+                    font=ctk.CTkFont(size=12, weight="bold")
+                ).pack(pady=20)
+                
+                progress_bar = ctk.CTkProgressBar(progress_dialog, width=350)
+                progress_bar.pack(pady=10, padx=25)
+                progress_bar.set(0)
+                
+                status_label = ctk.CTkLabel(
+                    progress_dialog, text="Initialisation...",
+                    font=ctk.CTkFont(size=10), text_color=self.colors["text_light"]
+                )
+                status_label.pack(pady=10)
+                
+                progress_dialog.update()
+                
+                # Variables pour stocker les résultats
+                notification_result = {'result': None}
+                
+                def send_notifications_background():
+                    """Envoyer les notifications dans un thread séparé"""
+                    try:
+                        result = self._notify_students_exam_period_sync(
+                            period_name=name,
+                            start_date=start_dt,
+                            end_date=end_dt,
+                            academic_year_id=active_year['academic_year_id'],
+                            progress_callback=lambda msg, val: (
+                                status_label.configure(text=msg),
+                                progress_bar.set(val),
+                                progress_dialog.update()
+                            )
+                        )
+                        notification_result['result'] = result
+                    except Exception as e:
+                        logger.error(f"❌ Erreur notifications background: {e}")
+                        notification_result['result'] = {'error': str(e)}
+                
+                # Lancer dans un thread séparé pour ne pas bloquer l'UI
+                import threading
+                notification_thread = threading.Thread(target=send_notifications_background, daemon=True)
+                notification_thread.start()
+                
+                # Attendre dans une boucle non-bloquante
+                def wait_for_notifications():
+                    if notification_thread.is_alive():
+                        progress_dialog.after(100, wait_for_notifications)
+                    else:
+                        progress_dialog.destroy()
+                        
+                        result = notification_result['result']
+                        if result and 'error' not in result:
+                            # Afficher résumé
+                            if result['total'] > 0:
+                                messagebox.showinfo(
+                                    "Résumé des Notifications",
+                                    f"Période: {name}\n\n"
+                                    f"✅ Notifiés: {result['notified']}/{result['total']}\n"
+                                    f"📧 Avec code: {result['with_code']}\n"
+                                    f"💬 Paiement reçu (sans code): {result.get('paid_no_code',0)}\n"
+                                    f"❌ Non payés: {result.get('unpaid',0)}\n"
+                                    f"⏭️  Sans contact: {result['skipped']}\n\n"
+                                    f"Messages: {result['messages']}"
+                                )
+                            else:
+                                messagebox.showinfo(
+                                    "Résumé des Notifications",
+                                    f"Période: {name}\n\nAucun étudiant à notifier.\n{result['messages']}"
+                                )
+                        else:
+                            messagebox.showerror(
+                                "Erreur Notifications",
+                                f"Une erreur s'est produite:\n{result.get('error', 'Erreur inconnue')}" if result else "Erreur inconnue"
+                            )
+                        
+                        # Nettoyer et rafraîchir la liste
+                        period_name_entry.delete(0, "end")
+                        start_entry.delete(0, "end")
+                        end_entry.delete(0, "end")
+                        self._show_exam_periods()  # Rafraîchir la liste
+                
+                wait_for_notifications()
+            else:
+                messagebox.showerror("Erreur", "Impossible d'ajouter la période.")
+        
+        button_frame = ctk.CTkFrame(form_card, fg_color="transparent")
+        button_frame.pack(fill="x", padx=20, pady=(0, 15))
+        
+        ctk.CTkButton(
+            button_frame, text="✅ Valider & Notifier", fg_color=self.colors["primary"],
+            hover_color=self.colors["info"], text_color=self.colors["text_white"],
+            height=40, corner_radius=8, command=add_exam_period
+        ).pack(side="left", padx=(0, 10))
+        
+        ctk.CTkButton(
+            button_frame, text="❌ Annuler", fg_color=self.colors["danger"],
+            hover_color="#dc2626", text_color=self.colors["text_white"],
+            height=40, corner_radius=8, 
+            command=lambda: self._run_with_loading(self._show_academic_years)
+        ).pack(side="left")
+        
+        # === CARD 2: Liste des périodes ===
+        list_card = self._create_card(self.content_frame)
+        list_card.pack(fill="both", expand=True, padx=0)
+        
+        ctk.CTkLabel(
+            list_card, text="📋 Périodes Actuelles", 
+            font=ctk.CTkFont(size=14, weight="bold"), text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=20, pady=(15, 10))
+        
+        exam_periods = self.academic_year_service.get_exam_periods(active_year['academic_year_id'])
+        
+        if exam_periods:
+            scroll_frame = ctk.CTkScrollableFrame(list_card, fg_color="transparent")
+            scroll_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+            
+            for period in exam_periods:
+                start = datetime.strptime(str(period['start_date']), "%Y-%m-%d")
+                end = datetime.strptime(str(period['end_date']), "%Y-%m-%d")
+                duration = (end - start).days
+                
+                period_frame = ctk.CTkFrame(scroll_frame, fg_color=self.colors["hover"], corner_radius=12)
+                period_frame.pack(fill="x", pady=8)
+                
+                info_frame = ctk.CTkFrame(period_frame, fg_color="transparent")
+                info_frame.pack(fill="x", padx=15, pady=12)
+                
+                ctk.CTkLabel(
+                    info_frame, text=period['period_name'], 
+                    font=ctk.CTkFont(size=12, weight="bold"), text_color=self.colors["text_dark"]
+                ).pack(anchor="w")
+                
+                date_info = f"📅 {start.strftime('%d/%m/%Y')} → {end.strftime('%d/%m/%Y')} ({duration} jours)"
+                ctk.CTkLabel(
+                    info_frame, text=date_info, 
+                    font=ctk.CTkFont(size=10), text_color=self.colors["text_light"]
+                ).pack(anchor="w", pady=(5, 0))
+        else:
+            ctk.CTkLabel(
+                list_card, text="Aucune période d'examen définie pour cette année.",
+                font=ctk.CTkFont(size=12), text_color=self.colors["text_light"]
+            ).pack(pady=40)
+    
+    def _notify_students_exam_period_sync(self, period_name: str, start_date, end_date, academic_year_id: int, progress_callback=None):
+        """Notifie TOUS les étudiants. Code d'accès seulement pour ceux qui ont payé. OPTIMISÉ pour rapidité."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        result = {
+            'total': 0, 'notified': 0, 'skipped': 0,
+            'with_code': 0, 'paid_no_code': 0, 'unpaid': 0,
+            'messages': ""
+        }
+        
+        try:
+            if progress_callback:
+                progress_callback("Récupération des étudiants...", 0.2)
+            
+            students_list = self.student_service.get_all_students_with_finance()
+            if not students_list:
+                result['messages'] = "Aucun étudiant en base de données"
+                return result
+            
+            result['total'] = len(students_list)
+            
+            if progress_callback:
+                progress_callback(f"Envoi des notifications... (0/{result['total']})", 0.3)
+            
+            # Préparer les données pour envoi paralléle
+            notifs_to_send = []
+            skipped_count = 0
+            with_code_count = 0
+            paid_no_code_count = 0
+            unpaid_count = 0
+            
+            for idx, student in enumerate(students_list):
+                student_id = student.get('student_id')
+                email = student.get('email', '').strip()
+                phone = student.get('phone_number', '').strip()
+                
+                if not email and not phone:
+                    skipped_count += 1
+                    continue
+                
+                # Vérifier état financier et code d'accès
+                has_valid_code = False
+                code_value = None
+                code_text = None
+                paid = False
+                
+                # déterminer si l'étudiant a déjà payé le seuil
+                try:
+                    paid = self.finance_service.is_threshold_reached(student_id)
+                except Exception:
+                    paid = False
+                
+                try:
+                    access_code = self.finance_service.get_latest_access_code(student_id)
+                except Exception:
+                    access_code = None
+                
+                if paid and not access_code:
+                    # si l'étudiant est payé mais n'a pas encore de code, générer un code
+                    try:
+                        # is_full_paid supposé vrai si seuil atteint
+                        self.finance_service._issue_access_code_if_needed(student_id, is_full_paid=True)
+                        access_code = self.finance_service.get_latest_access_code(student_id)
+                    except Exception:
+                        access_code = None
+                
+                if access_code:
+                    code_type = access_code.get('access_type', 'unknown')
+                    code_value = access_code.get('access_code')
+                    expires = access_code.get('expires_at')
+                    
+                    if code_type == 'full':
+                        has_valid_code = True
+                        code_text = "Valide toute l'année"
+                    elif code_type == 'partial' and expires:
+                        try:
+                            if isinstance(expires, str):
+                                expires_dt = datetime.strptime(expires, "%Y-%m-%d").date()
+                            else:
+                                expires_dt = expires.date() if hasattr(expires, 'date') else expires
+                            
+                            if expires_dt >= start_date:
+                                has_valid_code = True
+                                code_text = f"Jusqu'au {expires_dt.strftime('%d/%m/%Y')}"
+                        except:
+                            pass
+                
+                # Construire messages
+                student_name = f"{student.get('firstname', '').strip()} {student.get('lastname', '').strip()}".strip() or f"Étudiant {student_id}"
+                
+                if has_valid_code and code_value:
+                    email_subject = f"📅 Nouvelle Période d'Examen: {period_name}"
+                    email_body = f"""Bonjour {student_name},\n\nPériode d'examen confirmée: {period_name}\nDates: {start_date.strftime('%d/%m/%Y')} → {end_date.strftime('%d/%m/%Y')}\n\n🔐 Votre code d'accès: {code_value}\n({code_text})\n\nConservez ce code précieusement!\n\nU.O.R - Administration"""
+                    whatsapp_msg = f"🔔 *Période d'examen confirmée*\n{period_name}\n📅 {start_date.strftime('%d/%m/%Y')} → {end_date.strftime('%d/%m/%Y')}\n\n🔐 Code: `{code_value}`\n({code_text})\n\nU.O.R"
+                    with_code_count += 1
+                elif paid:
+                    # payé mais aucun code (rare)
+                    email_subject = f"📅 Période d'Examen: {period_name} - Paiement reçu"
+                    email_body = f"""Bonjour {student_name},\n\nMerci pour votre paiement.\nLa période d'examen {period_name} est confirmée:\n{start_date.strftime('%d/%m/%Y')} → {end_date.strftime('%d/%m/%Y')}\n\nVotre code d'accès sera envoyé sous peu.\n\nU.O.R - Administration"""
+                    whatsapp_msg = f"📅 Période d'examen: {period_name}\n{start_date.strftime('%d/%m/%Y')} → {end_date.strftime('%d/%m/%Y')}\n\n✓ Paiement reçu, code à venir\n\nU.O.R"
+                    paid_no_code_count += 1
+                else:
+                    # pas payé
+                    email_subject = f"📅 Période d'Examen: {period_name} - ACTION REQUISE"
+                    email_body = f"""Bonjour {student_name},\n\nPériode d'examen confirmée: {period_name}\nDates: {start_date.strftime('%d/%m/%Y')} → {end_date.strftime('%d/%m/%Y')}\n\n❌ Vous n'avez pas d'accès actuellement.\n\n📝 Régularisez votre paiement pour recevoir un code d'accès.\n\nU.O.R - Administration"""
+                    whatsapp_msg = f"📅 Période d'examen: {period_name}\n{start_date.strftime('%d/%m/%Y')} → {end_date.strftime('%d/%m/%Y')}\n\n❌ Régularisez votre paiement pour l'accès\n\nU.O.R"
+                    unpaid_count += 1
+                
+                notifs_to_send.append({
+                    'email': email,
+                    'phone': phone,
+                    'email_subject': email_subject,
+                    'email_body': email_body,
+                    'whatsapp_msg': whatsapp_msg
+                })
+            
+            result['skipped'] = skipped_count
+            result['with_code'] = with_code_count
+            result['paid_no_code'] = paid_no_code_count
+            result['unpaid'] = unpaid_count
+            
+            # Envoyer les notifications en parallèle
+            notified_count = 0
+            # utiliser autant de threads que de notifications pour maximiser la vitesse
+            max_workers = min(len(notifs_to_send), 20) or 1
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(self._send_notification, notif) for notif in notifs_to_send]
+
+                # Attendre et compter
+                for i, future in enumerate(as_completed(futures)):
+                    try:
+                        if future.result():
+                            notified_count += 1
+                    except:
+                        pass
+
+                    # Callback progression toutes les 5% seulement
+                    if progress_callback and len(futures) > 0:
+                        prog = (i + 1) / len(futures)
+                        if prog % 0.05 < 0.01 or i == len(futures) - 1:
+                            progress = 0.3 + 0.6 * prog
+                            progress_callback(f"Envoi... ({i + 1}/{len(futures)})", progress)
+            
+            result['notified'] = notified_count
+            result['messages'] = "Notifications envoyées avec succès"
+            
+        except Exception as e:
+            result['messages'] = f"Erreur: {str(e)}"
+        
+        return result
+    
+    def _send_notification(self, notif_data):
+        """Envoie une notification (email et/ou WhatsApp). Appelé en parallèle."""
+        try:
+            sent = False
+            
+            if notif_data['email']:
+                try:
+                    if self.notification_service._send_email(
+                        notif_data['email'],
+                        notif_data['email_subject'],
+                        notif_data['email_body']
+                    ):
+                        sent = True
+                except:
+                    pass
+            
+            if notif_data['phone']:
+                try:
+                    if self.notification_service._send_whatsapp(
+                        notif_data['phone'],
+                        notif_data['whatsapp_msg']
+                    ):
+                        sent = True
+                except:
+                    pass
+            
+            return sent
+        except:
+            return False
+    
+    def _notify_students_exam_period(self, period_name: str, start_date, end_date, academic_year_id: int):
+        """Notifie les étudiants en arrière-plan (legacy, maintenant synchrone par défaut)"""
+        # Maintenu pour compatibilité, appelle la version synchrone
+        self._notify_students_exam_period_sync(period_name, start_date, end_date, academic_year_id)
+    
     # ==================== STUDENT ACADEMIC DATA ====================
     
     def _show_student_academic_data(self):
@@ -4080,12 +4489,12 @@ class AdminDashboard(ctk.CTkFrame):
         header_frame.pack(fill="x", padx=0, pady=0)
         
         ctk.CTkLabel(
-            header_frame, text="📚 Ajouter les Données Académiques par Étudiant", font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_white"]
-        ).pack(anchor="w", padx=20, pady=(15, 5))
+            header_frame, text="📚 Ajouter les Données Académiques par Étudiant", font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_white"], justify="center"
+        ).pack(anchor="center", fill="x", padx=20, pady=(15, 5))
         
         ctk.CTkLabel(
-            header_frame, text="Gestion des notes, documents et certificats pour chaque étudiant", font=ctk.CTkFont(size=11), text_color="#e8f4ff"
-        ).pack(anchor="w", padx=20, pady=(0, 15))
+            header_frame, text="Gestion des notes, documents et certificats pour chaque étudiant", font=ctk.CTkFont(size=11), text_color="#e8f4ff", justify="center"
+        ).pack(anchor="center", fill="x", padx=20, pady=(0, 15))
         
         # Content frame
         content = ctk.CTkFrame(container)

@@ -8,6 +8,7 @@ import io
 import hashlib
 import threading
 import re
+import time
 from datetime import datetime
 from decimal import Decimal
 from tkinter import filedialog, messagebox, StringVar
@@ -16,6 +17,7 @@ from tkinter import ttk
 from PIL import Image
 from ui.i18n.translator import Translator
 from ui.theme.theme_manager import ThemeManager
+from ui.responsive import fit_existing_dialog
 from ui.components.modern_widgets import LoadingIndicator
 from app.services.dashboard_service import DashboardService
 from app.services.student.student_service import StudentService
@@ -74,8 +76,19 @@ class ErrorManager:
         log_msg = log_template.format(details=details or "No details provided")
         logger.error(log_msg)
         
-        # Afficher un message simple à l'utilisateur
-        messagebox.showerror("Erreur", user_msg, parent=parent)
+        # Afficher un message utilisateur clair
+        display_msg = user_msg
+        detailed_types = {
+            "validation_error",
+            "payment_invalid_amount",
+            "payment_exceeds_limit",
+            "payment_no_active_fees",
+            "payment_processing",
+        }
+        if error_type in detailed_types and details:
+            display_msg = f"{user_msg}\n\nDétail: {details}"
+
+        messagebox.showerror("Erreur", display_msg, parent=parent)
     
     @staticmethod
     def show_success(title: str, message: str, parent=None):
@@ -204,7 +217,8 @@ class AdminDashboard(ctk.CTkFrame):
         self.dashboard_service = DashboardService()
         self.student_service = StudentService()
         self.auth_service = AuthenticationService()
-        self.face_service = FaceRecognitionService()
+        # Lazy init: face_recognition est coûteux et ne sert pas au chargement initial du dashboard
+        self.face_service = None
         self.finance_service = FinanceService()
         self.academic_year_service = AcademicYearService()
         self.notification_service = NotificationService()
@@ -212,11 +226,15 @@ class AdminDashboard(ctk.CTkFrame):
         self.transfer_service = TransferService()
         self._photo_cache = {}
         self._esp32_status_label = None
+        self._esp32_poll_job = None
+        self._esp32_poll_active = False
         self._responsive_labels = []
         self.sidebar_mode = "compact"
         self._loading_overlay = None
         self._loading_indicator = None
         self._loading_visible = False
+        self.topbar = None
+        self.footer = None
         
         # Adaptive sidebar widths based on screen size
         if self.screen_width < 900:
@@ -242,6 +260,12 @@ class AdminDashboard(ctk.CTkFrame):
         self._sidebar_anim_job = None
         self._sidebar_animating = False
         self._sidebar_update_debounce_job = None
+        self._resize_debounce_job = None
+        self._table_mode_refresh_job = None
+        self._view_data_cache = {}
+        self._prefetch_inflight = set()
+        self._prefetch_after_job = None
+        self._scheduled_render_jobs = {}
         self._scrolling_active = False
         self.debug_students_table = False
         self.sidebar_mode_manual = None  # None=auto, "compact"=forcer compact, "full"=forcer complet
@@ -251,6 +275,201 @@ class AdminDashboard(ctk.CTkFrame):
         
         self.pack(fill="both", expand=True)
         self._create_ui()
+
+    def _get_current_window_size(self):
+        """Retourne la taille réelle de la fenêtre courante, avec fallback écran."""
+        try:
+            top = self.winfo_toplevel()
+            width = top.winfo_width() or self.winfo_width() or self.screen_width
+            height = top.winfo_height() or self.winfo_height() or self.screen_height
+            return max(width, 1), max(height, 1)
+        except Exception:
+            return self.screen_width, self.screen_height
+
+    def _refresh_responsive_metrics(self):
+        """Met à jour les métriques responsives à partir de la taille réelle de la fenêtre."""
+        width, height = self._get_current_window_size()
+        self.screen_width = width
+        self.screen_height = height
+
+        previous_mode = getattr(self, "ui_mode", None)
+        previous_scale = getattr(self, "ui_scale", None)
+        self.ui_mode, self.ui_scale = self._get_screen_profile()
+
+        if previous_mode != self.ui_mode or previous_scale != self.ui_scale:
+            try:
+                ctk.set_widget_scaling(self.ui_scale)
+            except Exception:
+                pass
+
+        if self.screen_width < 900:
+            self.sidebar_width_full = 200
+            self.sidebar_width_compact = 60
+            self.sidebar_collapse_breakpoint = 1000
+        elif self.screen_width < 1200:
+            self.sidebar_width_full = 240
+            self.sidebar_width_compact = 75
+            self.sidebar_collapse_breakpoint = 1200
+        elif self.screen_width < 1400:
+            self.sidebar_width_full = 260
+            self.sidebar_width_compact = 85
+            self.sidebar_collapse_breakpoint = 1400
+        else:
+            self.sidebar_width_full = 280
+            self.sidebar_width_compact = 90
+            self.sidebar_collapse_breakpoint = 1100
+
+        self.table_compact_breakpoint = 1200 if self.screen_width >= 1000 else 1000
+
+    def _get_face_service(self) -> FaceRecognitionService:
+        """Initialise la reconnaissance faciale à la demande."""
+        if self.face_service is None:
+            self.face_service = FaceRecognitionService()
+            logger.info("FaceRecognitionService initialized on-demand")
+        return self.face_service
+
+    def _get_cached_data(self, cache_key: str, loader, ttl_seconds: float = 5.0):
+        """Retourne des données mises en cache pendant un court instant pour fluidifier la navigation."""
+        try:
+            now = time.monotonic()
+            cached = self._view_data_cache.get(cache_key)
+            if cached and (now - cached["timestamp"]) < ttl_seconds:
+                return cached["value"]
+
+            value = loader()
+            self._view_data_cache[cache_key] = {"timestamp": now, "value": value}
+            return value
+        except Exception:
+            return loader()
+
+    def _invalidate_view_cache(self, *cache_keys):
+        """Invalide tout ou partie du cache UI après une mutation de données."""
+        if not cache_keys:
+            self._view_data_cache.clear()
+            return
+
+        for cache_key in cache_keys:
+            self._view_data_cache.pop(cache_key, None)
+
+    def _store_prefetched_data(self, cache_key: str, value):
+        """Stocke en cache le résultat d'un préchargement background sur le thread UI."""
+        self._view_data_cache[cache_key] = {
+            "timestamp": time.monotonic(),
+            "value": value,
+        }
+
+    def _queue_prefetch(self, cache_key: str, loader):
+        """Précharge une source de données lourde en arrière-plan sans bloquer l'interface."""
+        if cache_key in self._prefetch_inflight:
+            return
+
+        cached = self._view_data_cache.get(cache_key)
+        if cached and (time.monotonic() - cached["timestamp"]) < 3.0:
+            return
+
+        self._prefetch_inflight.add(cache_key)
+
+        def worker():
+            try:
+                value = loader()
+                self.after(0, lambda: self._store_prefetched_data(cache_key, value))
+            except Exception as exc:
+                logger.debug(f"Prefetch failed for {cache_key}: {exc}")
+            finally:
+                self.after(0, lambda: self._prefetch_inflight.discard(cache_key))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _schedule_heavy_views_prefetch(self, delay_ms: int = 350):
+        """Planifie le préchargement des vues lourdes après stabilisation de l'UI."""
+        try:
+            if self._prefetch_after_job:
+                self.after_cancel(self._prefetch_after_job)
+        except Exception:
+            pass
+
+        self._prefetch_after_job = self.after(delay_ms, self._prefetch_heavy_views)
+
+    def _prefetch_heavy_views(self):
+        """Précharge les données des écrans les plus lourds pour accélérer la première ouverture."""
+        self._prefetch_after_job = None
+        prefetch_map = {
+            "students_all_with_finance": self.student_service.get_all_students_with_finance,
+            "academic_years": self.academic_year_service.get_years,
+            "finance_snapshot": lambda: {
+                "revenue": self.dashboard_service.get_revenue_collected(),
+                "payment_status": self.dashboard_service.get_students_by_payment_status(),
+                "payments": self.dashboard_service.get_students_finance_overview(),
+            },
+            "dashboard_snapshot": lambda: {
+                "total_students": self.dashboard_service.get_total_students(),
+                "eligible_students": self.dashboard_service.get_eligible_students(),
+                "non_eligible_students": self.dashboard_service.get_non_eligible_students(),
+                "access_granted": self.dashboard_service.get_access_granted(),
+                "access_denied": self.dashboard_service.get_access_denied(),
+                "revenue": self.dashboard_service.get_revenue_collected(),
+                "completion": self.dashboard_service.get_degree_of_completion(),
+                "activities": self.dashboard_service.get_recent_activities(8),
+            },
+        }
+
+        for cache_key, loader in prefetch_map.items():
+            self._queue_prefetch(cache_key, loader)
+
+    def _cancel_scheduled_render(self, render_key: str):
+        """Annule un rendu progressif programmé."""
+        render_state = self._scheduled_render_jobs.pop(render_key, None)
+        if not render_state:
+            return
+        job_id = render_state.get("job")
+        if job_id:
+            try:
+                self.after_cancel(job_id)
+            except Exception:
+                pass
+
+    def _cancel_scheduled_renders(self, prefix: str = None):
+        """Annule un ensemble de rendus programmés, utile avant une reconstruction UI."""
+        render_keys = list(self._scheduled_render_jobs.keys())
+        for render_key in render_keys:
+            if prefix is None or render_key.startswith(prefix):
+                self._cancel_scheduled_render(render_key)
+
+    def _render_in_batches(self, render_key: str, items, render_item, batch_size: int = 18, delay_ms: int = 1, on_complete=None):
+        """Construit une liste d'éléments UI par lots pour éviter de figer l'interface."""
+        self._cancel_scheduled_render(render_key)
+
+        items = list(items or [])
+        if not items:
+            if on_complete:
+                on_complete()
+            return
+
+        token = object()
+        self._scheduled_render_jobs[render_key] = {"token": token, "job": None}
+        total_items = len(items)
+        current_index = 0
+
+        def step():
+            nonlocal current_index
+            render_state = self._scheduled_render_jobs.get(render_key)
+            if not render_state or render_state.get("token") is not token:
+                return
+
+            end_index = min(current_index + batch_size, total_items)
+            for item_index in range(current_index, end_index):
+                render_item(items[item_index], item_index)
+            current_index = end_index
+
+            if current_index < total_items:
+                render_state["job"] = self.after(delay_ms, step)
+            else:
+                self._scheduled_render_jobs.pop(render_key, None)
+                if on_complete:
+                    on_complete()
+
+        step()
+
     def _register_wrap(self, label, ratio: float = 0.35, min_width: int = 280, max_width: int = 600):
         """Enregistre un label pour ajuster automatiquement son wraplength"""
         self._responsive_labels.append((label, ratio, min_width, max_width))
@@ -258,27 +477,36 @@ class AdminDashboard(ctk.CTkFrame):
     def _on_resize(self, _event=None):
         """Gère le redimensionnement avec responsive design complet"""
         try:
+            if self._resize_debounce_job:
+                self.after_cancel(self._resize_debounce_job)
+            self._resize_debounce_job = self.after(120, self._apply_responsive_resize)
+        except Exception as e:
+            logger.debug(f"Resize event error: {e}")
+
+    def _apply_responsive_resize(self):
+        """Applique les recalculs responsive après debounce pour éviter les rerenders coûteux."""
+        self._resize_debounce_job = None
+        try:
+            self._refresh_responsive_metrics()
             if not self._responsive_labels:
                 self._update_sidebar_layout()
                 self._update_table_mode()
                 self._update_responsive_padding()
                 return
-            
+
             width = self.winfo_width() or self.screen_width
-            
-            # Mettre à jour les wraplengths
+
             for label, ratio, min_w, max_w in self._responsive_labels:
                 try:
                     wrap = int(max(min_w, min(max_w, width * ratio)))
                     label.configure(wraplength=wrap)
                 except Exception:
                     continue
-            
+
             self._update_sidebar_layout()
             self._update_table_mode()
             self._update_responsive_padding()
 
-            # Réévaluer le header Étudiants quand la fenêtre change de taille
             if self.current_view == "students":
                 try:
                     content_width = self.content_frame.winfo_width() if hasattr(self, "content_frame") else 0
@@ -297,7 +525,7 @@ class AdminDashboard(ctk.CTkFrame):
                 except Exception:
                     pass
         except Exception as e:
-            logger.debug(f"Resize event error: {e}")
+            logger.debug(f"Responsive resize apply error: {e}")
 
     def _refresh_students_layout_for_resize(self):
         """Reconstruit la vue Étudiants après changement de breakpoint responsive"""
@@ -311,27 +539,33 @@ class AdminDashboard(ctk.CTkFrame):
         """Ajuste les paddings et espacements selon la taille d'écran"""
         try:
             if self.screen_width < 768:
-                # Mobile
                 main_pad = 12
-                card_pad = 10
-                font_size_title = 20
+                bottom_pad = 10
+                topbar_height = 112
+                font_size_title = 18
                 font_size_subtitle = 10
             elif self.screen_width < 1024:
-                # Tablet
                 main_pad = 18
-                card_pad = 14
+                bottom_pad = 12
+                topbar_height = 82
                 font_size_title = 24
                 font_size_subtitle = 11
             else:
-                # Desktop
                 main_pad = 25
-                card_pad = 20
+                bottom_pad = 15
+                topbar_height = 90
                 font_size_title = 28
                 font_size_subtitle = 13
             
-            # Appliquer les paddings au content_container
-            if hasattr(self, 'content_container'):
-                self.content_container.configure()
+            if hasattr(self, 'topbar') and self.topbar:
+                self.topbar.configure(height=topbar_height)
+                self.topbar.pack_configure(padx=main_pad, pady=(6, 0))
+
+            if hasattr(self, 'content_container') and self.content_container:
+                self.content_container.pack_configure(padx=main_pad, pady=6)
+
+            if hasattr(self, 'footer') and self.footer:
+                self.footer.pack_configure(padx=main_pad, pady=(0, bottom_pad))
             
             # Ajuster les tailles de police dynamiquement
             if hasattr(self, 'title_label'):
@@ -343,8 +577,132 @@ class AdminDashboard(ctk.CTkFrame):
                 self.subtitle_label.configure(
                     font=ctk.CTkFont(size=font_size_subtitle)
                 )
+
+            if hasattr(self, 'lang_switch') and self.lang_switch:
+                self.lang_switch.configure(
+                    font=ctk.CTkFont(size=11 if self.screen_width < 900 else 12, weight="bold")
+                )
+
+            if hasattr(self, 'theme_btn') and self.theme_btn:
+                theme_size = 30 if self.screen_width < 900 else 32
+                self.theme_btn.configure(width=38 if self.screen_width < 900 else 40, height=theme_size)
+
+            if hasattr(self, 'lang_frame') and self.lang_frame:
+                self.lang_frame.configure(corner_radius=10 if self.screen_width < 900 else 8)
+
+            if hasattr(self, 'logo_frame') and self.logo_frame:
+                self.logo_frame.configure(height=64 if self.screen_width < 900 else 80)
+
+            if hasattr(self, 'logo_title_label') and self.logo_title_label:
+                self.logo_title_label.configure(font=ctk.CTkFont(size=22 if self.screen_width < 900 else 32, weight="bold"))
+
+            if hasattr(self, 'logo_subtitle_label') and self.logo_subtitle_label and self.sidebar_mode != "compact":
+                self.logo_subtitle_label.configure(font=ctk.CTkFont(size=9 if self.screen_width < 900 else 11))
+
+            if hasattr(self, 'sidebar_expand_btn') and self.sidebar_expand_btn:
+                self.sidebar_expand_btn.configure(height=42 if self.screen_width < 900 else 50)
+
+            if hasattr(self, 'sidebar_mode_label') and self.sidebar_mode_label:
+                if self.screen_width < 900 and self.sidebar_mode == "compact":
+                    self.sidebar_mode_label.pack_forget()
+                elif not self.sidebar_mode_label.winfo_ismapped():
+                    self.sidebar_mode_label.pack(pady=(6, 0))
+
+            if hasattr(self, 'nav_buttons') and self.nav_buttons:
+                for item in self.nav_buttons:
+                    btn = item.get("button")
+                    if not btn:
+                        continue
+                    if self.sidebar_mode == "compact":
+                        btn.configure(
+                            height=36 if self.screen_width < 900 else 45,
+                            corner_radius=10 if self.screen_width < 900 else 8,
+                            font=ctk.CTkFont(size=16 if self.screen_width < 900 else 18, weight="bold")
+                        )
+                        try:
+                            btn.pack_configure(padx=10 if self.screen_width < 900 else 15, pady=4 if self.screen_width < 900 else 3)
+                        except Exception:
+                            pass
+                    else:
+                        btn.configure(
+                            height=40 if self.screen_width < 900 else 45,
+                            corner_radius=10 if self.screen_width < 900 else 8,
+                            font=ctk.CTkFont(size=11 if self.screen_width < 900 else 13, weight="bold")
+                        )
+                        try:
+                            btn.pack_configure(padx=12 if self.screen_width < 900 else 15, pady=4 if self.screen_width < 900 else 3)
+                        except Exception:
+                            pass
+
+            self._update_topbar_layout()
+            self._update_footer_layout()
+
+            if hasattr(self, 'logout_btn') and self.logout_btn:
+                logout_height = 46 if self.screen_width < 900 else (50 if self.screen_width < 1400 else 60)
+                logout_font_size = 12 if self.screen_width < 900 else (13 if self.screen_width < 1400 else 14)
+                self.logout_btn.configure(
+                    height=logout_height,
+                    font=ctk.CTkFont(size=logout_font_size, weight="bold")
+                )
         except Exception as e:
             logger.debug(f"Responsive padding update error: {e}")
+
+    def _update_topbar_layout(self):
+        """Adapte la topbar selon la largeur disponible pour éviter les chevauchements."""
+        if not hasattr(self, "topbar") or not self.topbar:
+            return
+        if not hasattr(self, "title_frame") or not hasattr(self, "lang_frame"):
+            return
+
+        is_small = self.screen_width < 1024
+        is_tiny = self.screen_width < 900
+
+        try:
+            self.title_frame.place_forget()
+        except Exception:
+            pass
+        try:
+            self.title_frame.pack_forget()
+        except Exception:
+            pass
+        try:
+            self.lang_frame.pack_forget()
+        except Exception:
+            pass
+
+        if is_tiny:
+            self.title_frame.pack(side="top", anchor="w", padx=12, pady=(8, 4), fill="x")
+            self.lang_frame.pack(side="top", anchor="e", padx=8, pady=(0, 8))
+            self.title_label.configure(anchor="w", justify="left")
+            self.subtitle_label.configure(anchor="w", justify="left")
+        elif is_small:
+            self.title_frame.place(relx=0.42, rely=0.5, anchor="center")
+            self.lang_frame.pack(side="right", padx=10, pady=10)
+            self.title_label.configure(anchor="center", justify="center")
+            self.subtitle_label.configure(anchor="center", justify="center")
+        else:
+            self.title_frame.place(relx=0.5, rely=0.5, anchor="center")
+            self.lang_frame.pack(side="right", padx=10, pady=10)
+            self.title_label.configure(anchor="center", justify="center")
+            self.subtitle_label.configure(anchor="center", justify="center")
+
+    def _update_footer_layout(self):
+        """Réorganise le footer pour qu'il reste lisible en petite largeur."""
+        if not hasattr(self, "footer_left_frame") or not hasattr(self, "footer_right_frame"):
+            return
+
+        try:
+            self.footer_left_frame.pack_forget()
+            self.footer_right_frame.pack_forget()
+        except Exception:
+            pass
+
+        if self.screen_width < 900:
+            self.footer_left_frame.pack(fill="x", anchor="w")
+            self.footer_right_frame.pack(fill="x", anchor="w", pady=(6, 0))
+        else:
+            self.footer_left_frame.pack(side="left", fill="x", expand=True)
+            self.footer_right_frame.pack(side="right")
 
     def _get_screen_profile(self):
         """Détermine le mode d'affichage et le scaling selon la taille d'écran (RESPONSIVE)"""
@@ -485,6 +843,7 @@ class AdminDashboard(ctk.CTkFrame):
         logo_frame = ctk.CTkFrame(sidebar, height=80, fg_color=self.colors["sidebar_bg"])
         logo_frame.pack(fill="x", pady=(20, 10))
         logo_frame.pack_propagate(False)
+        self.logo_frame = logo_frame
         
         self.logo_title_label = ctk.CTkLabel(
             logo_frame, text="U.O.R", font=ctk.CTkFont(size=32, weight="bold"), text_color=self.colors["text_white"]
@@ -570,10 +929,19 @@ class AdminDashboard(ctk.CTkFrame):
             scrollbar_button_hover_color="#64748b"
         )
         nav_scrollable.pack(fill="both", expand=True, padx=0, pady=0)
+        self.nav_scrollable = nav_scrollable
         
         # Navigation
         nav_items = [
-            ("📊", "dashboard", self._t("dashboard", "Dashboard"), lambda: self._run_with_loading(self._show_dashboard)), ("👥", "students", self._t("students", "Étudiants"), lambda: self._run_with_loading(self._show_students)), ("�", "academic_data", "Données Académiques", lambda: self._run_with_loading(self._show_student_academic_data)), ("�💰", "finance", self._t("finance", "Finances"), lambda: self._run_with_loading(self._show_finance)), ("📚", "academic_years", self._t("academic_years", "Années Acad."), lambda: self._run_with_loading(self._show_academic_years)), ("�", "transfers", self._t("transfers", "Transferts"), lambda: self._run_with_loading(self._show_transfers)), ("�📋", "access_logs", self._t("access_logs", "Logs d'Accès"), lambda: self._run_with_loading(self._show_access_logs)), ("📈", "reports", self._t("reports", "Rapports"), lambda: self._run_with_loading(self._show_reports)), ]
+            ("📊", "dashboard", self._t("dashboard", "Dashboard"), lambda: self._run_with_loading(self._show_dashboard)),
+            ("👥", "students", self._t("students", "Étudiants"), lambda: self._run_with_loading(self._show_students)),
+            ("🧾", "academic_data", "Données Académiques", lambda: self._run_with_loading(self._show_student_academic_data)),
+            ("💰", "finance", self._t("finance", "Finances"), lambda: self._run_with_loading(self._show_finance)),
+            ("📚", "academic_years", self._t("academic_years", "Années Acad."), lambda: self._run_with_loading(self._show_academic_years)),
+            ("🔄", "transfers", self._t("transfers", "Transferts"), lambda: self._run_with_loading(self._show_transfers)),
+            ("📋", "access_logs", self._t("access_logs", "Logs d'Accès"), lambda: self._run_with_loading(self._show_access_logs)),
+            ("📈", "reports", self._t("reports", "Rapports"), lambda: self._run_with_loading(self._show_reports)),
+        ]
         
         self.nav_buttons = []
         for icon, key, label, callback in nav_items:
@@ -604,6 +972,7 @@ class AdminDashboard(ctk.CTkFrame):
         logout_footer = ctk.CTkFrame(sidebar, fg_color=self.colors["sidebar_bg"], height=100)
         logout_footer.pack(fill="x", side="bottom", pady=0)
         logout_footer.pack_propagate(False)
+        self.logout_footer = logout_footer
         
         # Séparateur avant logout
         ctk.CTkFrame(logout_footer, height=1, fg_color="#334155").pack(fill="x", padx=20, pady=(8, 12))
@@ -654,13 +1023,15 @@ class AdminDashboard(ctk.CTkFrame):
             pass
         
         # Top bar avec titre et langue
-        topbar = ctk.CTkFrame(self.main_content, height=90)
+        topbar = ctk.CTkFrame(self.main_content, height=90, corner_radius=10, border_width=1, border_color=self.colors["border"])
         topbar.pack(fill="x", padx=25, pady=(6, 0))
         topbar.pack_propagate(False)
+        self.topbar = topbar
         
         # Titre centré au milieu
-        title_frame = ctk.CTkFrame(topbar)
+        title_frame = ctk.CTkFrame(topbar, fg_color="transparent")
         title_frame.place(relx=0.5, rely=0.5, anchor="center")
+        self.title_frame = title_frame
         
         self.title_label = ctk.CTkLabel(
             title_frame, text=self._t("dashboard", "Dashboard"), font=ctk.CTkFont(size=28, weight="bold"), text_color=self.colors["text_dark"]
@@ -673,8 +1044,9 @@ class AdminDashboard(ctk.CTkFrame):
         self.subtitle_label.pack()
         
         # Sélecteur de langue et thème à droite
-        lang_frame = ctk.CTkFrame(topbar, fg_color=self.colors["card_bg"], corner_radius=8)
+        lang_frame = ctk.CTkFrame(topbar, fg_color=self.colors["card_bg"], corner_radius=10, border_width=1, border_color=self.colors["border"])
         lang_frame.pack(side="right", padx=10)
+        self.lang_frame = lang_frame
         
         ctk.CTkLabel(
             lang_frame, text="🌐", font=ctk.CTkFont(size=16)
@@ -690,6 +1062,7 @@ class AdminDashboard(ctk.CTkFrame):
             lang_frame, text="🌙" if self.theme.current_theme == "light" else "☀️", width=40, height=32, fg_color=self.colors["border"], hover_color=self.colors["hover"], text_color=self.colors["text_dark"], command=self._toggle_theme
         )
         theme_btn.pack(side="left", padx=(0, 15), pady=10)
+        self.theme_btn = theme_btn
         
         # Content container + scrollable frame (for slide animation)
         self.content_container = ctk.CTkFrame(self.main_content)
@@ -705,13 +1078,16 @@ class AdminDashboard(ctk.CTkFrame):
         # === FOOTER HARMONISÉ ===
         footer = self._create_footer()
         footer.pack(fill="x", padx=25, pady=(0, 15), side="bottom")
+        self.footer = footer
         
         self._ensure_loading_overlay()
         
         # Afficher la vue active
         self._render_current_view()
-        # Forcer le mode compact (icônes seulement) pour gagner de l'espace
-        self._apply_sidebar_mode("compact")
+        # Appliquer le mode responsive automatique selon la largeur réelle
+        self._do_update_sidebar_layout()
+        self._update_topbar_layout()
+        self._schedule_heavy_views_prefetch()
     
     def _create_card(self, parent, width=None, height=None):
         """Crée une carte avec ombre moderne"""
@@ -740,6 +1116,7 @@ class AdminDashboard(ctk.CTkFrame):
         # Infos à gauche
         left_frame = ctk.CTkFrame(footer_content, fg_color=self.colors["card_bg"])
         left_frame.pack(side="left", fill="x", expand=True)
+        self.footer_left_frame = left_frame
         
         sync_status = "✓ Synchronisé" if hasattr(self, '_last_sync') else "En cours..."
         ctk.CTkLabel(
@@ -761,6 +1138,7 @@ class AdminDashboard(ctk.CTkFrame):
         # Infos à droite
         right_frame = ctk.CTkFrame(footer_content, fg_color=self.colors["card_bg"])
         right_frame.pack(side="right")
+        self.footer_right_frame = right_frame
         
         version_text = "v1.1.0" if self.screen_width >= 900 else "v1.1"
         ctk.CTkLabel(
@@ -769,6 +1147,8 @@ class AdminDashboard(ctk.CTkFrame):
             font=ctk.CTkFont(size=9 if self.screen_width < 900 else 10),
             text_color=self.colors["text_light"]
         ).pack(side="right")
+
+        self._update_footer_layout()
         
         return footer
 
@@ -804,6 +1184,23 @@ class AdminDashboard(ctk.CTkFrame):
 
         slide(width)
 
+    def _fit_dialog_to_viewport(self, window, min_width=320, min_height=120, width_ratio=0.92, height_ratio=0.88):
+        """Ajuste une fenêtre secondaire pour qu'elle reste toujours visible à l'écran."""
+        if not window:
+            return
+
+        try:
+            fit_existing_dialog(
+                self,
+                window,
+                min_width=min_width,
+                min_height=min_height,
+                width_ratio=width_ratio,
+                height_ratio=height_ratio,
+            )
+        except Exception:
+            pass
+
     def _animate_window_open(self, window):
         """Affiche correctement une fenêtre secondaire (centré, sans animation lourde)."""
         if not window:
@@ -820,6 +1217,8 @@ class AdminDashboard(ctk.CTkFrame):
                 window.transient(parent)
         except Exception:
             pass
+
+        self._fit_dialog_to_viewport(window)
 
         # Center la fenêtre sur l'écran
         try:
@@ -865,19 +1264,14 @@ class AdminDashboard(ctk.CTkFrame):
         dialog.grab_set()
         dialog.resizable(False, False)
         
-        # Centrer la fenêtre
-        dialog.update_idletasks()
-        x = dialog.winfo_screenwidth() // 2 - 175
-        y = dialog.winfo_screenheight() // 2 - 60
-        dialog.geometry(f"+{x}+{y}")
-        
         # Contenu
         container = ctk.CTkFrame(dialog)
         container.pack(fill="both", expand=True, padx=20, pady=20)
         
         loading = LoadingIndicator(container, text=title, color=self.colors.get("primary", "#3b82f6"))
+        loading.pack(fill="x", expand=True)
         loading.start()
-        
+
         self._animate_window_open(dialog)
         return dialog, loading
 
@@ -897,8 +1291,8 @@ class AdminDashboard(ctk.CTkFrame):
         if self.sidebar_mode_manual is not None:
             return
         
-        # Sinon, utiliser le mode auto (compact par défaut)
-        target_mode = "compact"
+        # Sinon, utiliser le mode auto selon la largeur réelle de la fenêtre
+        target_mode = "compact" if self.screen_width < self.sidebar_collapse_breakpoint else "full"
         if target_mode == self.sidebar_mode:
             return
 
@@ -940,7 +1334,7 @@ class AdminDashboard(ctk.CTkFrame):
             if self.logout_btn:
                 # En mode compact, garder le texte mais plus petit
                 self.logout_btn.configure(
-                    text="🚪 Quitter",
+                    text="🚪" if self.screen_width < 900 else "🚪 Quitter",
                     anchor="center",
                     font=ctk.CTkFont(size=11, weight="bold")
                 )
@@ -975,6 +1369,11 @@ class AdminDashboard(ctk.CTkFrame):
                     pass
 
             self._unbind_sidebar_hover_expand()
+
+        try:
+            self._update_responsive_padding()
+        except Exception:
+            pass
 
     def _update_sidebar_mode_label(self):
         """Met à jour le label pour afficher le mode actuel"""
@@ -1089,7 +1488,21 @@ class AdminDashboard(ctk.CTkFrame):
         if new_mode == self.table_mode:
             return
         self.table_mode = new_mode
-        self._render_current_view()
+        refreshable_views = {"students", "finance", "access_logs", "reports", "academic_years", "transfers"}
+        if self.current_view not in refreshable_views:
+            return
+
+        if self._table_mode_refresh_job:
+            self.after_cancel(self._table_mode_refresh_job)
+        self._table_mode_refresh_job = self.after(80, self._refresh_current_view_after_table_mode_change)
+
+    def _refresh_current_view_after_table_mode_change(self):
+        """Rafraîchit la vue courante après changement de mode tableau, avec debounce."""
+        self._table_mode_refresh_job = None
+        try:
+            self._render_current_view()
+        except Exception as e:
+            logger.debug(f"Table mode refresh error: {e}")
 
     def _make_card_clickable(self, card, command):
         """Rend une carte cliquable avec effet hover"""
@@ -1165,43 +1578,44 @@ class AdminDashboard(ctk.CTkFrame):
     
     def _create_stat_card(self, parent, title, value, icon, color, action_text, action_command=None):
         """Crée une carte de statistique colorée - RESPONSIVE"""
+        is_tiny_screen = self.screen_width < 860
         is_small_screen = self.screen_width < 1000
         
-        card_height = 120 if is_small_screen else 140
+        card_height = 102 if is_tiny_screen else (120 if is_small_screen else 140)
         card = ctk.CTkFrame(parent, fg_color=color, corner_radius=12, height=card_height)
         card.pack_propagate(False)
         hover_color = self._shade_color(color, 0.9)
         
         # En-tête avec titre et icône
         header = ctk.CTkFrame(card)
-        header.pack(fill="x", padx=15 if is_small_screen else 20, pady=(15 if is_small_screen else 20, 8))
+        header.pack(fill="x", padx=12 if is_tiny_screen else (15 if is_small_screen else 20), pady=(12 if is_tiny_screen else (15 if is_small_screen else 20), 6 if is_tiny_screen else 8))
         
-        title_size = 10 if is_small_screen else 12
+        title_size = 9 if is_tiny_screen else (10 if is_small_screen else 12)
         header_label = ctk.CTkLabel(
             header, text=title, font=ctk.CTkFont(size=title_size), text_color=self.colors["text_white"]
         )
         header_label.pack(side="left")
         
-        icon_size = 16 if is_small_screen else 20
+        icon_size = 14 if is_tiny_screen else (16 if is_small_screen else 20)
         icon_label = ctk.CTkLabel(
             header, text=icon, font=ctk.CTkFont(size=icon_size)
         )
         icon_label.pack(side="right")
         
         # Valeur
-        value_size = 20 if is_small_screen else 28
+        value_size = 17 if is_tiny_screen else (20 if is_small_screen else 28)
         value_label = ctk.CTkLabel(
             card, text=value, font=ctk.CTkFont(size=value_size, weight="bold"), text_color=self.colors["text_white"]
         )
-        value_label.pack(anchor="w", padx=15 if is_small_screen else 20, pady=(0, 10))
+        value_label.pack(anchor="w", padx=12 if is_tiny_screen else (15 if is_small_screen else 20), pady=(0, 8 if is_tiny_screen else 10))
         
         # Action
-        action_size = 9 if is_small_screen else 11
+        action_size = 8 if is_tiny_screen else (9 if is_small_screen else 11)
         wrapped_command = (lambda: self._run_with_loading(action_command)) if action_command else None
         action_btn = ctk.CTkButton(
-            card, text=action_text, hover_color="#0a0a0a", text_color=self.colors["text_white"], font=ctk.CTkFont(size=action_size), height=22 if is_small_screen else 25, corner_radius=6, command=wrapped_command
+            card, text=action_text, hover_color="#0a0a0a", text_color=self.colors["text_white"], font=ctk.CTkFont(size=action_size), height=20 if is_tiny_screen else (22 if is_small_screen else 25), corner_radius=6, command=wrapped_command
         )
-        action_btn.pack(anchor="w", padx=15 if is_small_screen else 20, pady=(0, 10))
+        action_btn.pack(anchor="w", padx=12 if is_tiny_screen else (15 if is_small_screen else 20), pady=(0, 8 if is_tiny_screen else 10))
 
         if action_command:
             def on_enter(_):
@@ -1276,24 +1690,174 @@ class AdminDashboard(ctk.CTkFrame):
         if hasattr(self, "content_frame"):
             self._set_scrollbar_visible(self.content_frame, visible)
 
+    def _get_table_spacing_profile(self) -> dict:
+        """Retourne des espacements harmonisés pour un rendu doux et lisible."""
+        if self.screen_width < 900:
+            return {
+                "header_padx": 8,
+                "header_pady": 7,
+                "row_padx": 8,
+                "row_pady": 7,
+                "max_lines": 2,
+            }
+        if self.screen_width < 1200:
+            return {
+                "header_padx": 9,
+                "header_pady": 8,
+                "row_padx": 9,
+                "row_pady": 8,
+                "max_lines": 2,
+            }
+        return {
+            "header_padx": 10,
+            "header_pady": 9,
+            "row_padx": 10,
+            "row_pady": 9,
+            "max_lines": 3,
+        }
+
+    def _table_justify_from_anchor(self, anchor: str) -> str:
+        """Mappe un anchor Tk en justify pour garder un rendu propre."""
+        anchor = (anchor or "center").lower()
+        if anchor in ("w", "nw", "sw", "left"):
+            return "left"
+        if anchor in ("e", "ne", "se", "right"):
+            return "right"
+        return "center"
+
+    def _format_table_text(self, value, wrap_width: int = 0, max_lines: int = 2) -> str:
+        """Formate le texte d'une cellule pour éviter les débordements visuels.
+
+        - Respecte les retours ligne existants
+        - Coupe proprement avec ellipsis si trop long
+        """
+        text = "" if value is None else str(value)
+        if wrap_width <= 0:
+            return text
+
+        # Approximation simple chars/ligne selon largeur pixels
+        chars_per_line = max(8, int(wrap_width / 7))
+        if chars_per_line <= 0:
+            return text
+
+        output_lines = []
+        source_lines = text.split("\n") if "\n" in text else [text]
+
+        for source in source_lines:
+            source = source.strip()
+            if not source:
+                output_lines.append("")
+                continue
+
+            words = source.split()
+            if not words:
+                output_lines.append(source)
+                continue
+
+            current = words[0]
+            for w in words[1:]:
+                candidate = f"{current} {w}"
+                if len(candidate) <= chars_per_line:
+                    current = candidate
+                else:
+                    output_lines.append(current)
+                    current = w
+            output_lines.append(current)
+
+        if len(output_lines) <= max_lines:
+            return "\n".join(output_lines)
+
+        trimmed = output_lines[:max_lines]
+        last = trimmed[-1].rstrip()
+        if len(last) >= chars_per_line:
+            trim_at = max(0, chars_per_line - 1)
+            trimmed[-1] = trimmed[-1][:trim_at].rstrip() + "…"
+        else:
+            trimmed[-1] = (trimmed[-1] + " …").strip()
+        return "\n".join(trimmed)
+
     def _create_table_header(self, parent, headers, column_weights, anchors=None, min_widths=None, padx=10, pady=10):
         """Crée un header de tableau aligné - RESPONSIVE"""
         # Adapter font size pour petit écran
         is_tiny_screen = self.screen_width < 900
         header_font_size = 9 if is_tiny_screen else 11
+        spacing = self._get_table_spacing_profile()
+        header_padx = max(padx, spacing["header_padx"])
+        header_pady = max(pady, spacing["header_pady"])
+        max_lines = spacing["max_lines"]
+        is_dark = self.theme.current_theme == "dark"
+        header_bg = self._shade_color(self.colors["border"], 1.06) if is_dark else self._shade_color(self.colors["border"], 0.985)
+        header_border = self._shade_color(self.colors["border"], 1.24) if is_dark else self._shade_color(self.colors["border"], 0.90)
         
-        header_frame = ctk.CTkFrame(parent, fg_color=self.colors["border"], corner_radius=0)
+        header_frame = ctk.CTkFrame(
+            parent,
+            fg_color=header_bg,
+            corner_radius=10,
+            border_width=1,
+            border_color=header_border,
+        )
         header_frame.pack(fill="x", padx=0, pady=(0, 0))
 
         for col, header_text in enumerate(headers):
             anchor = anchors[col] if anchors else "center"
+            cell_width = min_widths[col] - 16 if min_widths and col < len(min_widths) else 0
+            justify = self._table_justify_from_anchor(anchor)
+            display_text = self._format_table_text(header_text, wrap_width=cell_width, max_lines=max_lines)
             label = ctk.CTkLabel(
-                header_frame, text=header_text, font=ctk.CTkFont(size=header_font_size, weight="bold"), text_color=self.colors["text_dark"], anchor=anchor
+                header_frame,
+                text=display_text,
+                font=ctk.CTkFont(size=header_font_size, weight="bold"),
+                text_color=self.colors["text_dark"],
+                anchor=anchor,
+                justify=justify,
+                wraplength=cell_width if cell_width > 0 else 0,
             )
-            label.grid(row=0, column=col, sticky="ew", padx=padx, pady=pady)
+            label.grid(row=0, column=col, sticky="ew", padx=header_padx, pady=header_pady)
 
         self._configure_table_columns(header_frame, column_weights, min_widths=min_widths)
         return header_frame
+
+    def _style_table_row(self, row, row_index: int, enable_hover: bool = True):
+        """Applique un style premium de ligne (zebra + hover) pour les tables."""
+        is_dark = self.theme.current_theme == "dark"
+        base = self.colors["hover"]
+
+        if is_dark:
+            stripe = self._shade_color(base, 1.08)
+            hover = self._shade_color(base, 1.18)
+            border_normal = self._shade_color(base, 1.30)
+            border_hover = self._shade_color(base, 1.45)
+        else:
+            stripe = self._shade_color(base, 0.96)
+            hover = self._shade_color(base, 0.90)
+            border_normal = self._shade_color(base, 0.88)
+            border_hover = self._shade_color(base, 0.80)
+
+        base_color = base if row_index % 2 == 0 else stripe
+        row.configure(
+            fg_color=base_color,
+            corner_radius=8,
+            border_width=1,
+            border_color=border_normal,
+        )
+
+        if not enable_hover:
+            return
+
+        def on_enter(_event=None):
+            try:
+                row.configure(fg_color=hover, border_color=border_hover)
+            except Exception:
+                pass
+
+        def on_leave(_event=None):
+            try:
+                row.configure(fg_color=base_color, border_color=border_normal)
+            except Exception:
+                pass
+
+        row.bind("<Enter>", on_enter)
+        row.bind("<Leave>", on_leave)
 
     def _get_table_layout(self, key: str, fallback_count: int = 0):
         """Retourne un layout standardisé (weights + anchors) pour les tableaux - RESPONSIVE"""
@@ -1333,6 +1897,10 @@ class AdminDashboard(ctk.CTkFrame):
         """Ajoute des cellules alignées dans une ligne - RESPONSIVE"""
         # Adapter les font sizes pour petit écran
         is_tiny_screen = self.screen_width < 900
+        spacing = self._get_table_spacing_profile()
+        row_padx = max(padx, spacing["row_padx"])
+        row_pady = max(pady, spacing["row_pady"])
+        max_lines = spacing["max_lines"]
         
         for col, value in enumerate(values):
             color = text_colors[col] if text_colors else self.colors["text_dark"]
@@ -1341,11 +1909,20 @@ class AdminDashboard(ctk.CTkFrame):
             size = max(8, base_size - 1) if is_tiny_screen else base_size
             weight = font_weights[col] if font_weights else "normal"
             anchor = anchors[col] if anchors else "center"
+            justify = self._table_justify_from_anchor(anchor)
+            cell_width = min_widths[col] - 16 if min_widths and col < len(min_widths) else 0
+            display_text = self._format_table_text(value, wrap_width=cell_width, max_lines=max_lines)
 
             label = ctk.CTkLabel(
-                row, text=value, font=ctk.CTkFont(size=size, weight=weight), text_color=color, anchor=anchor, wraplength=min_widths[col] - 4 if min_widths else 0  # Allow text wrapping
+                row,
+                text=display_text,
+                font=ctk.CTkFont(size=size, weight=weight),
+                text_color=color,
+                anchor=anchor,
+                justify=justify,
+                wraplength=cell_width if cell_width > 0 else 0,
             )
-            label.grid(row=0, column=col, sticky="ew", padx=padx, pady=pady)
+            label.grid(row=0, column=col, sticky="ew", padx=row_padx, pady=row_pady)
 
         self._configure_table_columns(row, column_weights, min_widths=min_widths)
 
@@ -1353,6 +1930,10 @@ class AdminDashboard(ctk.CTkFrame):
         """Ajoute des cellules alignées avec un décalage de colonne - RESPONSIVE"""
         # Adapter les font sizes pour petit écran
         is_tiny_screen = self.screen_width < 900
+        spacing = self._get_table_spacing_profile()
+        row_padx = max(padx, spacing["row_padx"])
+        row_pady = max(pady, spacing["row_pady"])
+        max_lines = spacing["max_lines"]
         
         self._configure_table_columns(row, column_weights, min_widths=min_widths)
         for idx, value in enumerate(values):
@@ -1362,14 +1943,22 @@ class AdminDashboard(ctk.CTkFrame):
             size = max(8, base_size - 1) if is_tiny_screen else base_size
             weight = font_weights[idx] if font_weights else "normal"
             anchor = anchors[idx] if anchors else "center"
+            justify = self._table_justify_from_anchor(anchor)
             
             col_idx = start_col + idx
-            wrap_width = min_widths[col_idx] - 4 if min_widths and col_idx < len(min_widths) else 0
+            wrap_width = min_widths[col_idx] - 16 if min_widths and col_idx < len(min_widths) else 0
+            display_text = self._format_table_text(value, wrap_width=wrap_width, max_lines=max_lines)
 
             label = ctk.CTkLabel(
-                row, text=value, font=ctk.CTkFont(size=size, weight=weight), text_color=color, anchor=anchor, wraplength=wrap_width if wrap_width > 0 else 0
+                row,
+                text=display_text,
+                font=ctk.CTkFont(size=size, weight=weight),
+                text_color=color,
+                anchor=anchor,
+                justify=justify,
+                wraplength=wrap_width if wrap_width > 0 else 0,
             )
-            label.grid(row=0, column=col_idx, sticky="ew", padx=padx, pady=pady)
+            label.grid(row=0, column=col_idx, sticky="ew", padx=row_padx, pady=row_pady)
     
     def _update_nav_buttons(self, active_key):
         """Met à jour le style du menu actif"""
@@ -1393,28 +1982,69 @@ class AdminDashboard(ctk.CTkFrame):
             )
         )
         
-        # Charger les données académiques
-        total_students = self.dashboard_service.get_total_students()
-        eligible_students = self.dashboard_service.get_eligible_students()
-        non_eligible_students = self.dashboard_service.get_non_eligible_students()
-        access_granted = self.dashboard_service.get_access_granted()
-        access_denied = self.dashboard_service.get_access_denied()
-        revenue = self.dashboard_service.get_revenue_collected()
-        completion = self.dashboard_service.get_degree_of_completion()
-        activities = self.dashboard_service.get_recent_activities(8)
-        
+        # Charger les données académiques avec un cache court pour fluidifier les allers-retours
+        dashboard_snapshot = self._get_cached_data(
+            "dashboard_snapshot",
+            lambda: {
+                "total_students": self.dashboard_service.get_total_students(),
+                "eligible_students": self.dashboard_service.get_eligible_students(),
+                "non_eligible_students": self.dashboard_service.get_non_eligible_students(),
+                "access_granted": self.dashboard_service.get_access_granted(),
+                "access_denied": self.dashboard_service.get_access_denied(),
+                "revenue": self.dashboard_service.get_revenue_collected(),
+                "completion": self.dashboard_service.get_degree_of_completion(),
+                "activities": self.dashboard_service.get_recent_activities(8),
+            },
+            ttl_seconds=5.0,
+        )
+        total_students = dashboard_snapshot["total_students"]
+        eligible_students = dashboard_snapshot["eligible_students"]
+        non_eligible_students = dashboard_snapshot["non_eligible_students"]
+        access_granted = dashboard_snapshot["access_granted"]
+        access_denied = dashboard_snapshot["access_denied"]
+        revenue = dashboard_snapshot["revenue"]
+        completion = dashboard_snapshot["completion"]
+        activities = dashboard_snapshot["activities"]
+
+        try:
+            content_width = self.content_frame.winfo_width() if self.content_frame else 0
+            if content_width <= 1:
+                content_width = self.winfo_toplevel().winfo_width()
+        except Exception:
+            content_width = self.screen_width
+
+        is_tiny_dashboard = content_width < 980
+        is_narrow_dashboard = content_width < 1280
+        row_stack_side = "top" if is_narrow_dashboard else "left"
+        row_stack_fill = "x" if is_narrow_dashboard else "both"
+        row_stack_expand = not is_narrow_dashboard
+
+        info_card_height = 220 if is_tiny_dashboard else (235 if is_narrow_dashboard else 250)
+        secondary_card_height = 175 if is_tiny_dashboard else (190 if is_narrow_dashboard else 250)
+        dashboard_padx = 18 if is_tiny_dashboard else 25
+        dashboard_title_size = 18 if is_tiny_dashboard else 20
+        dashboard_body_size = 11 if is_tiny_dashboard else 12
+        dashboard_section_size = 15 if is_tiny_dashboard else 16
+        secondary_font_size = 10 if is_tiny_dashboard else 11
+
         # === ROW 1: INFO + ACTIVITÉS + PROGRESSION ===
         row1 = ctk.CTkFrame(self.content_frame)
         row1.pack(fill="x", pady=(0, 20))
-        
+
         # Carte d'Information Académique
-        info_card = self._create_card(row1, height=250)
-        info_card.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        info_card = self._create_card(row1, height=info_card_height)
+        info_card.pack(
+            side="top" if is_narrow_dashboard else "left",
+            fill="x" if is_narrow_dashboard else "both",
+            expand=not is_narrow_dashboard,
+            padx=(0, 0) if is_narrow_dashboard else (0, 10),
+            pady=(0, 12) if is_narrow_dashboard else 0,
+        )
         self._make_card_clickable(info_card, self._show_students)
         
         ctk.CTkLabel(
-            info_card, text="📚 Plateforme d'Accès aux Examens", font=ctk.CTkFont(size=20, weight="bold"), text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=25, pady=(20, 5))
+            info_card, text="📚 Plateforme d'Accès aux Examens", font=ctk.CTkFont(size=dashboard_title_size, weight="bold"), text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=dashboard_padx, pady=(18 if is_tiny_dashboard else 20, 5))
         
         info_text = (
             "Gestion académique centralisée pour l'accès sécurisé aux examens. "
@@ -1422,16 +2052,16 @@ class AdminDashboard(ctk.CTkFrame):
             "consultez l'historique d'accès en temps réel."
         )
         info_label = ctk.CTkLabel(
-            info_card, text=info_text, font=self._font(12), text_color=self.colors["text_light"], wraplength=350, justify="left"
+            info_card, text=info_text, font=self._font(dashboard_body_size), text_color=self.colors["text_light"], wraplength=350, justify="left"
         )
-        info_label.pack(anchor="w", padx=25, pady=(0, 15))
+        info_label.pack(anchor="w", padx=dashboard_padx, pady=(0, 12 if is_tiny_dashboard else 15))
         self._register_wrap(info_label, ratio=0.32, min_width=260, max_width=520)
         
         # Stats d'une ligne (single line with responsive wrap)
         stats_row_info = ctk.CTkFrame(info_card)
-        stats_row_info.pack(fill="x", padx=25, pady=8)
+        stats_row_info.pack(fill="x", padx=dashboard_padx, pady=8)
 
-        stats_font_size = 12 if self.screen_width < 1200 else 13
+        stats_font_size = 11 if is_tiny_dashboard else (12 if self.screen_width < 1200 else 13)
         stats_text = (
             f"👥 Total: {total_students}    "
             f"✅ Éligibles: {eligible_students}    "
@@ -1446,68 +2076,98 @@ class AdminDashboard(ctk.CTkFrame):
         
         # Image académique
         img_frame = ctk.CTkFrame(info_card, fg_color=self.colors["primary"], height=80, corner_radius=8)
-        img_frame.pack(fill="x", padx=25, pady=(10, 20))
+        img_frame.pack(fill="x", padx=dashboard_padx, pady=(10, 18 if is_tiny_dashboard else 20))
         img_frame.pack_propagate(False)
         ctk.CTkLabel(
-            img_frame, text="🎓", font=ctk.CTkFont(size=50)
+            img_frame, text="🎓", font=ctk.CTkFont(size=42 if is_tiny_dashboard else 50)
         ).pack(expand=True)
+
+        secondary_row = row1 if not is_narrow_dashboard else ctk.CTkFrame(self.content_frame)
+        if is_narrow_dashboard:
+            secondary_row.pack(fill="x", pady=(0, 20))
+
+        secondary_side = "top" if is_tiny_dashboard else "left"
+        secondary_fill = "x" if is_tiny_dashboard else "both"
+        secondary_expand = not is_tiny_dashboard
         
         # Activités Récentes
-        activity_card = self._create_card(row1, height=250)
-        activity_card.pack(side="left", fill="both", expand=True, padx=(5, 5))
+        activity_card = self._create_card(secondary_row, height=secondary_card_height)
+        activity_card.pack(
+            side=secondary_side if is_narrow_dashboard else row_stack_side,
+            fill=secondary_fill if is_narrow_dashboard else row_stack_fill,
+            expand=secondary_expand if is_narrow_dashboard else row_stack_expand,
+            padx=(0, 0) if is_narrow_dashboard else (5, 5),
+            pady=(0, 10) if is_tiny_dashboard else (0, 0),
+        )
         self._make_card_clickable(activity_card, self._show_access_logs)
         
         ctk.CTkLabel(
-            activity_card, text="🕐 Activités Récentes", font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=25, pady=(20, 15))
+            activity_card, text="🕐 Activités Récentes", font=ctk.CTkFont(size=dashboard_section_size, weight="bold"), text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=dashboard_padx, pady=(18 if is_tiny_dashboard else 20, 12 if is_tiny_dashboard else 15))
         
         # Afficher les activités
-        for activity in activities[:4]:
-            act_item = ctk.CTkFrame(activity_card)
-            act_item.pack(fill="x", padx=25, pady=4)
-            
-            color = self.colors["success"] if activity["status"] == "granted" else self.colors["danger"]
-            dot = ctk.CTkLabel(act_item, text="●", text_color=color, font=ctk.CTkFont(size=14))
-            dot.pack(side="left", padx=(0, 10))
-            
-            text_frame = ctk.CTkFrame(act_item)
-            text_frame.pack(side="left", fill="x", expand=True)
-            
+        if activities:
+            for activity in activities[:3 if is_tiny_dashboard else 4]:
+                act_item = ctk.CTkFrame(activity_card)
+                act_item.pack(fill="x", padx=dashboard_padx, pady=4)
+                
+                color = self.colors["success"] if activity["status"] == "granted" else self.colors["danger"]
+                dot = ctk.CTkLabel(act_item, text="●", text_color=color, font=ctk.CTkFont(size=14))
+                dot.pack(side="left", padx=(0, 10))
+                
+                text_frame = ctk.CTkFrame(act_item)
+                text_frame.pack(side="left", fill="x", expand=True)
+                
+                ctk.CTkLabel(
+                    text_frame, text=activity['action'], font=ctk.CTkFont(size=secondary_font_size, weight="bold"), text_color=self.colors["text_dark"]
+                ).pack(anchor="w")
+                
+                ctk.CTkLabel(
+                    text_frame, text=f"{activity['student']} ({activity['id']})", font=ctk.CTkFont(size=max(9, secondary_font_size - 1)), text_color=self.colors["text_light"]
+                ).pack(anchor="w")
+        else:
             ctk.CTkLabel(
-                text_frame, text=activity['action'], font=ctk.CTkFont(size=11, weight="bold"), text_color=self.colors["text_dark"]
-            ).pack(anchor="w")
-            
-            ctk.CTkLabel(
-                text_frame, text=f"{activity['student']} ({activity['id']})", font=ctk.CTkFont(size=10), text_color=self.colors["text_light"]
-            ).pack(anchor="w")
+                activity_card,
+                text="Aucune activité récente à afficher pour le moment.",
+                font=ctk.CTkFont(size=secondary_font_size),
+                text_color=self.colors["text_light"],
+                justify="left",
+                wraplength=max(240, int(content_width * 0.35)),
+            ).pack(anchor="w", padx=dashboard_padx, pady=(6, 12))
         
         # Progression vers l'Éligibilité
-        progress_card = self._create_card(row1, height=250)
-        progress_card.pack(side="left", fill="both", expand=True, padx=(5, 0))
+        progress_card = self._create_card(secondary_row, height=secondary_card_height)
+        progress_card.pack(
+            side=secondary_side if is_narrow_dashboard else row_stack_side,
+            fill=secondary_fill if is_narrow_dashboard else row_stack_fill,
+            expand=secondary_expand if is_narrow_dashboard else row_stack_expand,
+            padx=(0, 0) if is_narrow_dashboard else (5, 0),
+            pady=0 if not is_tiny_dashboard else (0, 0),
+        )
         self._make_card_clickable(progress_card, self._show_finance)
         
         ctk.CTkLabel(
-            progress_card, text="📊 Taux d'Éligibilité", font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=25, pady=(20, 10))
+            progress_card, text="📊 Taux d'Éligibilité", font=ctk.CTkFont(size=dashboard_section_size, weight="bold"), text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=dashboard_padx, pady=(18 if is_tiny_dashboard else 20, 10))
         
         # Pourcentage d'éligibilité
         percentage = completion["percentage"]
         ctk.CTkLabel(
-            progress_card, text=f"{percentage:.1f}%", font=ctk.CTkFont(size=32, weight="bold"), text_color=self.colors["primary"]
-        ).pack(anchor="w", padx=25, pady=(0, 5))
+            progress_card, text=f"{percentage:.1f}%", font=ctk.CTkFont(size=26 if is_tiny_dashboard else 32, weight="bold"), text_color=self.colors["primary"]
+        ).pack(anchor="w", padx=dashboard_padx, pady=(0, 5))
         
         # Barre de progression globale
         overall_bar = ctk.CTkProgressBar(
             progress_card, height=12, progress_color=self.colors["primary"], fg_color=self.colors["border"]
         )
         overall_bar.set(percentage / 100)
-        overall_bar.pack(fill="x", padx=25, pady=(0, 15))
+        overall_bar.pack(fill="x", padx=dashboard_padx, pady=(0, 12 if is_tiny_dashboard else 15))
         
         # Détails
         detail_text = f"{completion['eligible']} / {completion['total']} étudiants éligibles"
         ctk.CTkLabel(
-            progress_card, text=detail_text, font=ctk.CTkFont(size=11 if self.screen_width < 1200 else 12), text_color=self.colors["text_light"]
-        ).pack(anchor="w", padx=25, pady=(0, 8))
+            progress_card, text=detail_text, font=ctk.CTkFont(size=10 if is_tiny_dashboard else (11 if self.screen_width < 1200 else 12)), text_color=self.colors["text_light"]
+        ).pack(anchor="w", padx=dashboard_padx, pady=(0, 8))
         
         # Autres progressions
         others = [
@@ -1515,17 +2175,17 @@ class AdminDashboard(ctk.CTkFrame):
         
         for label, count, est_max, color in others:
             item = ctk.CTkFrame(progress_card)
-            item.pack(fill="x", padx=25, pady=5)
+            item.pack(fill="x", padx=dashboard_padx, pady=4 if is_tiny_dashboard else 5)
             
             label_frame = ctk.CTkFrame(item)
             label_frame.pack(fill="x")
             
             ctk.CTkLabel(
-                label_frame, text=label, font=ctk.CTkFont(size=11), text_color=self.colors["text_dark"]
+                label_frame, text=label, font=ctk.CTkFont(size=secondary_font_size), text_color=self.colors["text_dark"]
             ).pack(side="left")
             
             ctk.CTkLabel(
-                label_frame, text=f"{count}", font=ctk.CTkFont(size=11, weight="bold"), text_color=color
+                label_frame, text=f"{count}", font=ctk.CTkFont(size=secondary_font_size, weight="bold"), text_color=color
             ).pack(side="right")
             
             # Mini bar
@@ -1544,30 +2204,52 @@ class AdminDashboard(ctk.CTkFrame):
             ("Total Étudiants", str(total_students), "👥", self.colors["primary"], "Voir tous", self._show_students), ("Accès Accordés", str(access_granted), "✅", self.colors["success"], "Voir logs", self._show_access_logs), ("Revenus Collectés", self._format_usd(revenue), "💰", self.colors["warning"], "Détails", self._show_finance), ("Accès Refusés", str(access_denied), "❌", self.colors["danger"], "Rapports", self._show_reports)
         ]
 
-        # Responsive: layout horizontal ou vertical selon écran
+        # Responsive: layout horizontal, vertical ou 2x2 selon écran
         is_small_screen = self.screen_width < 1000
-        stats_layout_side = "top" if is_small_screen else "left"
-        
-        for i, (title, value, icon, color, action, command) in enumerate(academic_stats):
-            stat_card = self._create_stat_card(stats_row, title, value, icon, color, action, action_command=command)
-            stat_card.pack(side=stats_layout_side, fill="both", expand=True, padx=(0 if i == 0 else 3), pady=(0 if i == 0 else 3))
+        if is_tiny_dashboard:
+            top_stats_row = ctk.CTkFrame(stats_row)
+            top_stats_row.pack(fill="x", pady=(0, 6))
+            bottom_stats_row = ctk.CTkFrame(stats_row)
+            bottom_stats_row.pack(fill="x")
+            stat_rows = [top_stats_row, top_stats_row, bottom_stats_row, bottom_stats_row]
+
+            for i, (title, value, icon, color, action, command) in enumerate(academic_stats):
+                stat_card = self._create_stat_card(stat_rows[i], title, value, icon, color, action, action_command=command)
+                stat_card.pack(side="left", fill="both", expand=True, padx=(0, 4) if i % 2 == 0 else (4, 0), pady=0)
+        else:
+            stats_layout_side = "top" if is_small_screen else "left"
+            for i, (title, value, icon, color, action, command) in enumerate(academic_stats):
+                stat_card = self._create_stat_card(stats_row, title, value, icon, color, action, action_command=command)
+                stat_card.pack(side=stats_layout_side, fill="both", expand=True, padx=(0 if i == 0 else 3), pady=(0 if i == 0 else 3))
         
         # === ROW 3: GRAPHIQUES ET DÉTAILS ===
         row3 = ctk.CTkFrame(self.content_frame)
-        row3.pack(fill="both", expand=True)
+        row3.pack(fill="x" if is_narrow_dashboard else "both", expand=not is_narrow_dashboard)
+
+        access_card_height = 250 if is_tiny_dashboard else (300 if is_narrow_dashboard else None)
+        finance_card_height = 190 if is_tiny_dashboard else (210 if is_narrow_dashboard else None)
+        lower_padx = 18 if is_tiny_dashboard else 25
+        lower_title_size = 16 if is_tiny_dashboard else 18
+        lower_text_size = 10 if is_tiny_dashboard else 11
         
         # Historique d'Accès Détaillé
-        access_card = self._create_card(row3)
-        access_card.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        access_card = self._create_card(row3, height=access_card_height)
+        access_card.pack(
+            side=row_stack_side,
+            fill="x" if is_narrow_dashboard else "both",
+            expand=not is_narrow_dashboard,
+            padx=(0, 0) if is_narrow_dashboard else (0, 10),
+            pady=(0, 12) if is_narrow_dashboard else 0,
+        )
         self._make_card_clickable(access_card, self._show_access_logs)
         
         ctk.CTkLabel(
-            access_card, text="📋 Historique d'Accès Détaillé", font=ctk.CTkFont(size=18, weight="bold"), text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=25, pady=(20, 15))
+            access_card, text="📋 Historique d'Accès Détaillé", font=ctk.CTkFont(size=lower_title_size, weight="bold"), text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=lower_padx, pady=(18 if is_tiny_dashboard else 20, 12 if is_tiny_dashboard else 15))
         
         # Tableau des activités
         table_frame = ctk.CTkFrame(access_card, fg_color=self.colors["hover"], corner_radius=8)
-        table_frame.pack(fill="both", expand=True, padx=25, pady=(0, 20))
+        table_frame.pack(fill="both", expand=True, padx=lower_padx, pady=(0, 16 if is_tiny_dashboard else 20))
         
         # Header du tableau
         headers = ["Étudiant", "ID", "Action", "Heure"]
@@ -1575,36 +2257,51 @@ class AdminDashboard(ctk.CTkFrame):
         column_weights = layout["weights"]
         header_anchors = layout["anchors"]
         min_widths = layout["min_widths"]
-        self._create_table_header(table_frame, headers, column_weights, anchors=header_anchors, min_widths=min_widths, padx=10, pady=8)
+        self._create_table_header(table_frame, headers, column_weights, anchors=header_anchors, min_widths=min_widths, padx=8 if is_tiny_dashboard else 10, pady=6 if is_tiny_dashboard else 8)
         
         # Lignes du tableau
         layout = self._get_table_layout("dashboard_access")
         row_min_widths = layout["min_widths"]
-        for activity in activities:
-            row_frame = ctk.CTkFrame(table_frame)
-            row_frame.pack(fill="x", padx=10, pady=3)
-            
-            action_color = self.colors["success"] if "accordé" in activity['action'] else self.colors["danger"]
-            time_str = activity['timestamp'].strftime("%H:%M") if hasattr(activity['timestamp'], 'strftime') else str(activity['timestamp'])[-8:-3]
+        visible_activities = activities[:4 if is_tiny_dashboard else len(activities)]
+        if visible_activities:
+            for row_index, activity in enumerate(visible_activities):
+                row_frame = ctk.CTkFrame(table_frame)
+                row_frame.pack(fill="x", padx=8 if is_tiny_dashboard else 10, pady=2 if is_tiny_dashboard else 3)
+                
+                action_color = self.colors["success"] if "accordé" in activity['action'] else self.colors["danger"]
+                time_str = activity['timestamp'].strftime("%H:%M") if hasattr(activity['timestamp'], 'strftime') else str(activity['timestamp'])[-8:-3]
 
-            row_values = [activity['student'], activity['id'], activity['action'], time_str]
-            row_colors = [self.colors["text_dark"], self.colors["text_light"], action_color, self.colors["text_light"]]
-            row_weights = ["normal", "normal", "bold", "normal"]
-            row_anchors = ["w", "w", "w", "e"]
-            self._populate_table_row(
-                row_frame, row_values, column_weights, text_colors=row_colors, font_weights=row_weights, anchors=row_anchors, min_widths=row_min_widths, padx=15, pady=5
-            )
+                row_values = [activity['student'], activity['id'], activity['action'], time_str]
+                row_colors = [self.colors["text_dark"], self.colors["text_light"], action_color, self.colors["text_light"]]
+                row_weights = ["normal", "normal", "bold", "normal"]
+                row_anchors = ["w", "w", "w", "e"]
+                self._populate_table_row(
+                    row_frame, row_values, column_weights, text_colors=row_colors, font_weights=row_weights, anchors=row_anchors, min_widths=row_min_widths, padx=10 if is_tiny_dashboard else 15, pady=4 if is_tiny_dashboard else 5
+                )
+                self._style_table_row(row_frame, row_index)
+        else:
+            ctk.CTkLabel(
+                table_frame,
+                text="Aucun accès récent à afficher.",
+                font=ctk.CTkFont(size=lower_text_size),
+                text_color=self.colors["text_light"],
+            ).pack(anchor="w", padx=lower_padx, pady=(10, 14))
         
         # Résumé Financier
         fin_width = 320 if self.screen_width < 1000 else (360 if self.screen_width < 1400 else 400)
-        financial_card = self._create_card(row3, width=fin_width)
-        financial_card.pack(side="right", fill="y", padx=(5, 0))
+        financial_card = self._create_card(row3, width=None if is_narrow_dashboard else fin_width, height=finance_card_height)
+        financial_card.pack(
+            side="top" if is_narrow_dashboard else "right",
+            fill="x" if is_narrow_dashboard else "y",
+            padx=(0, 0) if is_narrow_dashboard else (5, 0),
+            pady=0,
+        )
         financial_card.pack_propagate(False)
         self._make_card_clickable(financial_card, self._show_finance)
         
         ctk.CTkLabel(
-            financial_card, text="💵 Résumé Financier", font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=25, pady=(20, 15))
+            financial_card, text="💵 Résumé Financier", font=ctk.CTkFont(size=15 if is_tiny_dashboard else 16, weight="bold"), text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=lower_padx, pady=(18 if is_tiny_dashboard else 20, 12 if is_tiny_dashboard else 15))
         
         # Données financières
         financial_data = [
@@ -1612,43 +2309,46 @@ class AdminDashboard(ctk.CTkFrame):
         
         for amount, label, color_key in financial_data:
             fin_item = ctk.CTkFrame(financial_card, fg_color=self.colors["hover"], corner_radius=8)
-            fin_item.pack(fill="x", padx=20, pady=6)
+            fin_item.pack(fill="x", padx=16 if is_tiny_dashboard else 20, pady=5 if is_tiny_dashboard else 6)
             
             ctk.CTkLabel(
-                fin_item, text=amount, font=ctk.CTkFont(size=15, weight="bold"), text_color=self.colors["text_dark"]
-            ).pack(anchor="w", padx=15, pady=(10, 0))
+                fin_item, text=amount, font=ctk.CTkFont(size=13 if is_tiny_dashboard else 15, weight="bold"), text_color=self.colors["text_dark"]
+            ).pack(anchor="w", padx=12 if is_tiny_dashboard else 15, pady=(8 if is_tiny_dashboard else 10, 0))
             
             ctk.CTkLabel(
-                fin_item, text=label, font=ctk.CTkFont(size=11), text_color=self.colors["text_light"]
-            ).pack(anchor="w", padx=15, pady=(0, 10))
+                fin_item, text=label, font=ctk.CTkFont(size=lower_text_size), text_color=self.colors["text_light"]
+            ).pack(anchor="w", padx=12 if is_tiny_dashboard else 15, pady=(0, 8 if is_tiny_dashboard else 10))
 
         # === ROW 4: ESP32 COMMUNICATION ===
         row4 = ctk.CTkFrame(self.content_frame)
         row4.pack(fill="x", pady=(20, 0))
 
-        esp_card = self._create_card(row4)
+        esp_card = self._create_card(row4, height=160 if is_tiny_dashboard else None)
         esp_card.pack(fill="x", expand=True)
+        if is_tiny_dashboard:
+            esp_card.pack_propagate(False)
 
         ctk.CTkLabel(
-            esp_card, text="📡 Communication ESP32 (Wi‑Fi)", font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_dark"]
-        ).pack(anchor="w", padx=25, pady=(20, 8))
+            esp_card, text="📡 Communication ESP32 (Wi‑Fi)", font=ctk.CTkFont(size=15 if is_tiny_dashboard else 16, weight="bold"), text_color=self.colors["text_dark"]
+        ).pack(anchor="w", padx=lower_padx, pady=(18 if is_tiny_dashboard else 20, 8))
 
         ctk.CTkLabel(
             esp_card, text=(
                 "• L’ESP32 se connecte au Wi‑Fi et contacte le serveur U.O.R.\n"
                 "• L’étudiant envoie: Matricule + Code d’accès + Photo.\n"
                 "• Le système répond: ACCÈS_OK / ERR_AUTH / ERR_FACE / ERR_FINANCE."
-            ), font=ctk.CTkFont(size=11), text_color=self.colors["text_light"], justify="left"
-        ).pack(anchor="w", padx=25, pady=(0, 12))
+            ), font=ctk.CTkFont(size=lower_text_size), text_color=self.colors["text_light"], justify="left", wraplength=max(280, int(content_width * 0.7))
+        ).pack(anchor="w", padx=lower_padx, pady=(0, 12))
 
         status_row = ctk.CTkFrame(esp_card, fg_color=self.colors["hover"], corner_radius=8)
-        status_row.pack(fill="x", padx=25, pady=(0, 20))
+        status_row.pack(fill="x", padx=lower_padx, pady=(0, 16 if is_tiny_dashboard else 20))
         self._esp32_status_label = ctk.CTkLabel(
-            status_row, text="Statut: En attente de connexion ESP32", font=ctk.CTkFont(size=11, weight="bold"), text_color=self.colors["warning"]
+            status_row, text="Statut: En attente de connexion ESP32", font=ctk.CTkFont(size=lower_text_size, weight="bold"), text_color=self.colors["warning"]
         )
-        self._esp32_status_label.pack(anchor="w", padx=15, pady=10)
+        self._esp32_status_label.pack(anchor="w", padx=12 if is_tiny_dashboard else 15, pady=8 if is_tiny_dashboard else 10)
 
-        self._refresh_esp32_status()
+        # Démarrer après rendu UI pour ne pas ajouter de latence perceptible
+        self._start_esp32_status_polling(initial_delay_ms=1200)
     
     def _show_students(self):
         """Affiche la page Étudiants avec navigation hiérarchique Faculté > Département > Promotion"""
@@ -1670,8 +2370,12 @@ class AdminDashboard(ctk.CTkFrame):
         
         # === HEADER ===
 
-        # Récupérer toutes les données des étudiants
-        self.students_full_data_all = self.student_service.get_all_students_with_finance()
+        # Récupérer toutes les données des étudiants (cache court pour accélérer la navigation)
+        self.students_full_data_all = self._get_cached_data(
+            "students_all_with_finance",
+            self.student_service.get_all_students_with_finance,
+            ttl_seconds=8.0,
+        )
 
         # Si l'année sélectionnée n'a aucun étudiant, réinitialiser le filtre
         if self.selected_academic_year_id:
@@ -1698,7 +2402,8 @@ class AdminDashboard(ctk.CTkFrame):
 
         # === NAVIGATION ANNÉE ACADÉMIQUE ===
         # Adapter la hauteur pour petit écran
-        filter_height = 36 if is_compact_layout else 48
+        is_tiny_students = content_width < 900
+        filter_height = 64 if is_tiny_students else (36 if is_compact_layout else 48)
         filter_pady = (0, 4) if is_compact_layout else (0, 6)
         filter_padx = (10, 8) if is_compact_layout else (15, 10)
         filter_font_size = 10 if is_compact_layout else 12
@@ -1707,15 +2412,23 @@ class AdminDashboard(ctk.CTkFrame):
         year_filter_frame.pack(fill="x", pady=filter_pady)
         year_filter_frame.pack_propagate(False)
 
-        ctk.CTkLabel(
+        year_label = ctk.CTkLabel(
             year_filter_frame, text="📅 Année académique:", font=ctk.CTkFont(size=filter_font_size, weight="bold"), text_color=self.colors["text_dark"]
-        ).pack(side="left", padx=filter_padx, pady=4)
+        )
+        if is_tiny_students:
+            year_label.pack(anchor="w", padx=filter_padx[0], pady=(6, 0))
+        else:
+            year_label.pack(side="left", padx=filter_padx, pady=4)
 
-        academic_years = self.academic_year_service.get_years()
+        academic_years = self._get_cached_data(
+            "academic_years",
+            self.academic_year_service.get_years,
+            ttl_seconds=15.0,
+        )
         year_names = [y.get("year_name") for y in academic_years if y.get("year_name")]
         self.academic_year_map = {y.get("year_name"): y.get("academic_year_id") for y in academic_years}
 
-        combo_width = 180 if is_compact_layout else 220
+        combo_width = 160 if is_tiny_students else (180 if is_compact_layout else 220)
         combo_height = 28 if is_compact_layout else 30
         year_filter = ctk.CTkComboBox(
             year_filter_frame, values=["Toutes Années"] + year_names, width=combo_width, height=combo_height
@@ -1727,7 +2440,10 @@ class AdminDashboard(ctk.CTkFrame):
             year_filter.set(current_name or "Toutes Années")
         else:
             year_filter.set("Toutes Années")
-        year_filter.pack(side="left", padx=(0, 10), pady=4)
+        if is_tiny_students:
+            year_filter.pack(anchor="w", padx=filter_padx[0], pady=(4, 6))
+        else:
+            year_filter.pack(side="left", padx=(0, 10), pady=4)
 
         # === STATS ET BOUTON RESPONSIVE ===
         actions_row = None
@@ -2202,6 +2918,7 @@ class AdminDashboard(ctk.CTkFrame):
             return
         
         def render_students(filter_text=""):
+            self._cancel_scheduled_renders("students_")
             for widget in content_parent.winfo_children():
                 widget.destroy()
             
@@ -2281,16 +2998,31 @@ class AdminDashboard(ctk.CTkFrame):
 
                 rows_container = getattr(rows_scroll, "_scrollable_frame", rows_scroll)
 
-                # Lignes des étudiants
-                for index, student in enumerate(filtered_students):
-                    self._render_student_row_in_promotion(rows_container, student, column_weights, row_index=index)
-
-                rows_scroll.update_idletasks()
-                table_frame.update_idletasks()
+                # Lignes des étudiants rendues par lots pour éviter les freezes
+                self._render_in_batches(
+                    render_key=f"students_promo_{promo_id}",
+                    items=filtered_students,
+                    render_item=lambda student_item, row_index, target=rows_container, weights=column_weights: self._render_student_row_in_promotion(
+                        target, student_item, weights, row_index=row_index
+                    ),
+                    batch_size=14,
+                    delay_ms=1,
+                    on_complete=lambda scroll=rows_scroll, table=table_frame: [
+                        scroll.update_idletasks(),
+                        table.update_idletasks(),
+                    ],
+                )
         
+        search_state = {"job": None}
+
+        def schedule_students_render(_event=None):
+            if search_state["job"]:
+                self.after_cancel(search_state["job"])
+            search_state["job"] = self.after(180, lambda: render_students(search_entry.get()))
+
         # Rendu initial
         render_students()
-        search_entry.bind("<KeyRelease>", lambda e: render_students(search_entry.get()))
+        search_entry.bind("<KeyRelease>", schedule_students_render)
     
     def _render_student_row_in_promotion(self, parent, student, column_weights, row_index: int = 0):
         """Rend une ligne étudiant dans la vue promotion"""
@@ -2562,7 +3294,86 @@ class AdminDashboard(ctk.CTkFrame):
         button_frame.grid_columnconfigure(0, weight=1)
         button_frame.grid_columnconfigure(1, weight=1)
 
+        field_widgets = {
+            "student_number": student_number_entry,
+            "firstname": firstname_entry,
+            "lastname": lastname_entry,
+            "email": email_entry,
+            "phone": phone_entry,
+            "year": year_entry,
+            "faculty": faculty_entry,
+            "department": department_entry,
+            "promotion": promotion_entry,
+            "photo": photo_entry,
+        }
+
+        default_border_color = self.colors["border"]
+        error_border_color = self.colors["danger"]
+
+        validation_feedback = ctk.CTkLabel(
+            form_scroll,
+            text="",
+            font=self._font(10),
+            text_color=self.colors["danger"],
+            justify="left",
+            wraplength=dialog_width - 80,
+        )
+        validation_feedback.pack(fill="x", pady=(4, 8), padx=4)
+        validation_feedback.pack_forget()
+
+        def reset_field_errors():
+            for widget in field_widgets.values():
+                try:
+                    widget.configure(border_color=default_border_color, border_width=1)
+                except Exception:
+                    continue
+            validation_feedback.configure(text="")
+            validation_feedback.pack_forget()
+
+        def mark_field_error(field_key: str):
+            widget = field_widgets.get(field_key)
+            if widget is None:
+                return
+            try:
+                widget.configure(border_color=error_border_color, border_width=2)
+            except Exception:
+                pass
+
+        def show_form_errors(errors: list, focus_field: str = None):
+            if not errors:
+                return
+            feedback = "⚠️ Veuillez corriger les points suivants :\n" + "\n".join([f"• {err}" for err in errors])
+            validation_feedback.configure(text=feedback)
+            validation_feedback.pack(fill="x", pady=(4, 8), padx=4)
+            if focus_field and field_widgets.get(focus_field):
+                try:
+                    field_widgets[focus_field].focus_set()
+                except Exception:
+                    pass
+
+        def parse_registration_error(raw_error: str):
+            details = (raw_error or "").strip()
+            lower = details.lower()
+            if not details:
+                return "Échec d'enregistrement: cause inconnue.", None
+
+            if "duplicate entry" in lower:
+                if "student_number" in lower or "matricule" in lower:
+                    return "Ce matricule existe déjà. Veuillez en saisir un autre.", "student_number"
+                if "email" in lower:
+                    return "Cette adresse email est déjà utilisée.", "email"
+                if "phone" in lower or "telephone" in lower:
+                    return "Ce numéro de téléphone est déjà utilisé.", "phone"
+                return "Un enregistrement avec ces informations existe déjà.", None
+
+            if "cannot be null" in lower:
+                return "Certaines informations obligatoires sont manquantes.", None
+
+            return f"Échec d'enregistrement: {details}", None
+
         def save_student():
+            reset_field_errors()
+
             student_number = student_number_entry.get().strip()
             firstname = firstname_entry.get().strip()
             lastname = lastname_entry.get().strip()
@@ -2575,8 +3386,58 @@ class AdminDashboard(ctk.CTkFrame):
             selected_year_id = year_map.get(selected_year_name) if selected_year_name else None
             photo_path = photo_path_var.get().strip()
 
-            if not all([student_number, firstname, lastname, email, phone_number, faculty_label, department_label, promotion_label, photo_path, selected_year_name]):
-                ErrorManager.show_error("validation_error", "All fields are required", dialog)
+            errors = []
+            first_error_field = None
+
+            def add_error(field_key: str, message: str):
+                nonlocal first_error_field
+                errors.append(message)
+                mark_field_error(field_key)
+                if first_error_field is None:
+                    first_error_field = field_key
+
+            required_fields = [
+                ("student_number", student_number, "Le matricule étudiant est obligatoire."),
+                ("firstname", firstname, "Le prénom est obligatoire."),
+                ("lastname", lastname, "Le nom est obligatoire."),
+                ("email", email, "L'email est obligatoire."),
+                ("phone", phone_number, "Le téléphone WhatsApp est obligatoire."),
+                ("faculty", faculty_label, "La faculté est obligatoire."),
+                ("department", department_label, "Le département est obligatoire."),
+                ("promotion", promotion_label, "La promotion est obligatoire."),
+                ("year", selected_year_name, "L'année académique est obligatoire."),
+                ("photo", photo_path, "La photo passeport est obligatoire."),
+            ]
+
+            for field_key, value, message in required_fields:
+                if not value:
+                    add_error(field_key, message)
+
+            if student_number:
+                valid, msg = self.auth_service.validators.validate_student_number(student_number)
+                if not valid:
+                    add_error("student_number", f"Matricule invalide ({msg}).")
+
+            if email:
+                valid, msg = self.auth_service.validators.validate_email(email)
+                if not valid:
+                    add_error("email", f"Email invalide ({msg}).")
+
+            if phone_number:
+                valid, msg = self.auth_service.validators.validate_phone(phone_number)
+                if not valid:
+                    add_error("phone", f"Téléphone invalide ({msg}).")
+
+            if photo_path:
+                allowed_ext = {".jpg", ".jpeg", ".png", ".bmp"}
+                ext = os.path.splitext(photo_path)[1].lower()
+                if not os.path.isfile(photo_path):
+                    add_error("photo", "Le fichier photo sélectionné est introuvable.")
+                elif ext not in allowed_ext:
+                    add_error("photo", "Format de photo non supporté (utilisez JPG, JPEG, PNG ou BMP).")
+
+            if errors:
+                show_form_errors(errors, first_error_field)
                 return
 
             if selected_year_name and not selected_year_id:
@@ -2587,25 +3448,28 @@ class AdminDashboard(ctk.CTkFrame):
                     "• Frais finaux: $500\n"
                     "• Validité partielle: 30 jours"
                 )
-                
+
                 if create_year:
                     selected_year_id = self.academic_year_service.create_year_simple(selected_year_name)
                     if not selected_year_id:
-                        ErrorManager.show_error("validation_error", f"Failed to create academic year: {selected_year_name}", dialog)
+                        add_error("year", f"Impossible de créer l'année académique '{selected_year_name}'.")
+                        show_form_errors(errors, first_error_field)
                         return
                 else:
                     messagebox.showinfo("Annulé", "Veuillez créer l'année académique d'abord dans la section 'Années Académiques'.")
                     return
-            
+
             if not selected_year_id:
-                ErrorManager.show_error("validation_error", "Academic year is required", dialog)
+                add_error("year", "Année académique invalide ou non reconnue.")
+                show_form_errors(errors, first_error_field)
                 return
 
             faculty_matches = self.student_service.find_faculty_by_input(faculty_label)
             if not faculty_matches:
                 faculty_id = self.student_service.create_faculty(faculty_label)
                 if not faculty_id:
-                    ErrorManager.show_error("validation_error", f"Failed to create faculty: {faculty_label}", dialog)
+                    add_error("faculty", f"Impossible de créer la faculté '{faculty_label}'.")
+                    show_form_errors(errors, first_error_field)
                     return
             else:
                 faculty_id = faculty_matches[0]["id"]
@@ -2614,7 +3478,8 @@ class AdminDashboard(ctk.CTkFrame):
             if not department_matches:
                 department_id = self.student_service.create_department(department_label, faculty_id)
                 if not department_id:
-                    ErrorManager.show_error("validation_error", f"Failed to create department: {department_label}", dialog)
+                    add_error("department", f"Impossible de créer le département '{department_label}'.")
+                    show_form_errors(errors, first_error_field)
                     return
             else:
                 department_id = department_matches[0]["id"]
@@ -2623,7 +3488,8 @@ class AdminDashboard(ctk.CTkFrame):
             if not promotion_matches:
                 promotion_id = self.student_service.create_promotion(promotion_label, department_id)
                 if not promotion_id:
-                    ErrorManager.show_error("validation_error", f"Failed to create promotion: {promotion_label}", dialog)
+                    add_error("promotion", f"Impossible de créer la promotion '{promotion_label}'.")
+                    show_form_errors(errors, first_error_field)
                     return
             else:
                 promotion_id = promotion_matches[0]["id"]
@@ -2631,7 +3497,7 @@ class AdminDashboard(ctk.CTkFrame):
             year_data = next((y for y in years if y.get("academic_year_id") == selected_year_id), None)
             threshold_required = None
             final_fee_value = None
-            
+
             if year_data:
                 threshold_required = Decimal(str(year_data.get("threshold_amount", 0)))
                 final_fee_value = Decimal(str(year_data.get("final_fee", threshold_required)))
@@ -2640,25 +3506,32 @@ class AdminDashboard(ctk.CTkFrame):
                 return
 
             encoding = None
-            if self.face_service.is_available():
+            face_service = self._get_face_service()
+            if face_service.is_available():
                 try:
-                    encoding = self.face_service.register_face(photo_path, 1)
+                    encoding = face_service.register_face(photo_path, 1)
                 except Exception as e:
-                    ErrorManager.show_error("validation_error", f"Face registration failed: {str(e)}", dialog)
+                    add_error("photo", f"Échec de l'analyse faciale: {str(e)}")
+                    show_form_errors(errors, first_error_field)
                     return
 
                 if encoding is None:
-                    ErrorManager.show_error("validation_error", "No face detected or multiple faces found. Use a passport photo.", dialog)
+                    add_error("photo", "Aucun visage détecté (ou plusieurs visages). Utilisez une photo passeport claire.")
+                    show_form_errors(errors, first_error_field)
                     return
 
-                quality_ok, quality_msg = self.face_service.validate_passport_photo(photo_path)
+                quality_ok, quality_msg = face_service.validate_passport_photo(photo_path)
                 if not quality_ok:
-                    ErrorManager.show_error("validation_error", f"Photo quality insufficient: {quality_msg}", dialog)
+                    add_error("photo", f"Qualité photo insuffisante: {quality_msg}")
+                    show_form_errors(errors, first_error_field)
                     return
             else:
-                messagebox.showwarning(
-                    "Info", "Reconnaissance faciale non disponible. La photo passeport sera utilisée plus tard pour la validation."
+                add_error(
+                    "photo",
+                    "Reconnaissance faciale indisponible sur ce poste. Installation requise avant d'inscrire un étudiant (bibliothèque face_recognition).",
                 )
+                show_form_errors(errors, first_error_field)
+                return
 
             storage_dir = os.path.join(os.getcwd(), "storage", "student_photos")
             os.makedirs(storage_dir, exist_ok=True)
@@ -2670,7 +3543,8 @@ class AdminDashboard(ctk.CTkFrame):
                 with open(stored_photo_path, "rb") as f:
                     photo_blob = f.read()
             except Exception as e:
-                ErrorManager.show_error("validation_error", f"Failed to save photo: {str(e)}", dialog)
+                add_error("photo", f"Impossible d'enregistrer la photo: {str(e)}")
+                show_form_errors(errors, first_error_field)
                 return
 
             face_bytes = encoding.tobytes() if encoding is not None else None
@@ -2680,7 +3554,11 @@ class AdminDashboard(ctk.CTkFrame):
 
             student_id = self.auth_service.register_student_with_face(student, None, face_bytes)
             if not student_id:
-                ErrorManager.show_error("database_query", "Failed to register student", dialog)
+                raw_error = self.auth_service.get_last_error()
+                user_error, field_key = parse_registration_error(raw_error)
+                if field_key:
+                    mark_field_error(field_key)
+                show_form_errors([user_error], field_key)
                 return
 
             finance_ok = self.finance_service.create_finance_profile(student_id, threshold_required, selected_year_id)
@@ -2696,6 +3574,13 @@ class AdminDashboard(ctk.CTkFrame):
 
             ErrorManager.show_success("Succès", "Étudiant enregistré avec succès.", dialog)
             dialog.destroy()
+            self._invalidate_view_cache(
+                "dashboard_snapshot",
+                "students_all_with_finance",
+                "academic_years",
+                "finance_snapshot",
+            )
+            self._schedule_heavy_views_prefetch(delay_ms=250)
             self._show_students()
 
         cancel_btn = ctk.CTkButton(
@@ -2936,6 +3821,13 @@ class AdminDashboard(ctk.CTkFrame):
             if self.student_service.update_student(student_id, update_data):
                 ErrorManager.show_success("Succès", "Étudiant modifié avec succès.", dialog)
                 dialog.destroy()
+                self._invalidate_view_cache(
+                    "dashboard_snapshot",
+                    "students_all_with_finance",
+                    "academic_years",
+                    "finance_snapshot",
+                )
+                self._schedule_heavy_views_prefetch(delay_ms=250)
                 self._show_students()
             else:
                 ErrorManager.show_error("database_query", f"Failed to update student {student_id}", dialog)
@@ -3044,6 +3936,27 @@ class AdminDashboard(ctk.CTkFrame):
             if status_text:
                 progress_label.configure(text=status_text)
 
+        def map_payment_service_error(raw_error: str):
+            details = (raw_error or "").strip()
+            lower = details.lower()
+
+            if not details:
+                return "payment_processing", "Erreur inconnue lors de l'enregistrement du paiement"
+
+            if "no_active_fees" in lower or "no active fees" in lower:
+                return "payment_no_active_fees", details
+
+            if "overpayment" in lower:
+                return "payment_exceeds_limit", details
+
+            if "no_finance_profile" in lower:
+                return "payment_processing", "Aucun profil financier trouvé pour cet étudiant"
+
+            if "no_promotion_data" in lower:
+                return "payment_processing", "Impossible de déterminer la promotion/frais de l'étudiant"
+
+            return "payment_processing", details
+
         def save_payment():
             amount_text = amount_entry.get().strip().replace(",", ".")
             if not amount_text:
@@ -3121,16 +4034,31 @@ class AdminDashboard(ctk.CTkFrame):
                         if success:
                             update_progress(100, "Paiement enregistré ✓")
                             self.after(1500, lambda: [
+                                self._invalidate_view_cache(
+                                    "dashboard_snapshot",
+                                    "students_all_with_finance",
+                                    "finance_snapshot",
+                                ),
+                                self._schedule_heavy_views_prefetch(delay_ms=250),
                                 ErrorManager.show_success("Succès", "Paiement enregistré avec succès.", dialog), dialog.destroy(), self._render_current_view()
                             ])
                         else:
                             progress_frame.pack_forget()
                             save_btn.configure(state="normal")
                             amount_entry.configure(state="normal")
+                            service_error = self.finance_service.get_last_error()
                             if error_msg:
-                                ErrorManager.show_error("payment_processing", error_msg, dialog)
+                                mapped_type, mapped_details = map_payment_service_error(error_msg)
+                                ErrorManager.show_error(mapped_type, mapped_details, dialog)
+                            elif service_error:
+                                mapped_type, mapped_details = map_payment_service_error(service_error)
+                                ErrorManager.show_error(mapped_type, mapped_details, dialog)
                             else:
-                                ErrorManager.show_error("payment_processing", "Unknown error", dialog)
+                                ErrorManager.show_error(
+                                    "payment_processing",
+                                    "Échec du paiement sans détail technique. Vérifiez les frais de la promotion et le profil financier.",
+                                    dialog,
+                                )
 
                     self.after(0, finish)
 
@@ -3233,7 +4161,7 @@ class AdminDashboard(ctk.CTkFrame):
         cumulative = Decimal("0")
         layout = self._get_table_layout("payment_history")
         min_widths = layout["min_widths"]
-        for item in history:
+        for row_index, item in enumerate(history):
             row = ctk.CTkFrame(scroll)
             row.pack(fill="x", pady=4)
             created_at = item.get("created_at")
@@ -3245,10 +4173,49 @@ class AdminDashboard(ctk.CTkFrame):
             self._populate_table_row(
                 row, row_values, weights, text_colors=[self.colors["text_dark"]] * 3, font_sizes=[10] * 3, anchors=["w", "e", "center"], min_widths=min_widths, padx=10, pady=4
             )
+            self._style_table_row(row, row_index)
+
+    def _start_esp32_status_polling(self, initial_delay_ms: int = 0):
+        """Démarre le polling ESP32 (si une étiquette valide est présente)."""
+        self._stop_esp32_status_polling()
+        if not self._esp32_status_label:
+            return
+        try:
+            if not self._esp32_status_label.winfo_exists():
+                self._esp32_status_label = None
+                return
+        except Exception:
+            self._esp32_status_label = None
+            return
+
+        self._esp32_poll_active = True
+        delay = max(0, int(initial_delay_ms))
+        self._esp32_poll_job = self.after(delay, self._refresh_esp32_status)
+
+    def _stop_esp32_status_polling(self):
+        """Arrête proprement le polling ESP32 pour éviter les tâches orphelines."""
+        self._esp32_poll_active = False
+        if self._esp32_poll_job is not None:
+            try:
+                self.after_cancel(self._esp32_poll_job)
+            except Exception:
+                pass
+            self._esp32_poll_job = None
 
     def _refresh_esp32_status(self):
         """Met à jour le statut ESP32 sans bloquer l'UI"""
-        if not self._esp32_status_label:
+        if not self._esp32_poll_active or not self._esp32_status_label:
+            self._stop_esp32_status_polling()
+            return
+
+        try:
+            if not self._esp32_status_label.winfo_exists():
+                self._esp32_status_label = None
+                self._stop_esp32_status_polling()
+                return
+        except Exception:
+            self._esp32_status_label = None
+            self._stop_esp32_status_polling()
             return
 
         def worker():
@@ -3256,7 +4223,7 @@ class AdminDashboard(ctk.CTkFrame):
             self.after(0, lambda: self._update_esp32_status_label(status))
 
         threading.Thread(target=worker, daemon=True).start()
-        self.after(self.esp32_service.refresh_interval_ms, self._refresh_esp32_status)
+        self._esp32_poll_job = self.after(self.esp32_service.refresh_interval_ms, self._refresh_esp32_status)
 
     def _update_esp32_status_label(self, status):
         if not self._esp32_status_label:
@@ -3289,8 +4256,17 @@ class AdminDashboard(ctk.CTkFrame):
         kpi_frame = ctk.CTkFrame(self.content_frame)
         kpi_frame.pack(fill="x", pady=(0, 20))
         
-        revenue = self.dashboard_service.get_revenue_collected()
-        payment_status = self.dashboard_service.get_students_by_payment_status()
+        finance_snapshot = self._get_cached_data(
+            "finance_snapshot",
+            lambda: {
+                "revenue": self.dashboard_service.get_revenue_collected(),
+                "payment_status": self.dashboard_service.get_students_by_payment_status(),
+                "payments": self.dashboard_service.get_students_finance_overview(),
+            },
+            ttl_seconds=5.0,
+        )
+        revenue = finance_snapshot["revenue"]
+        payment_status = finance_snapshot["payment_status"]
         if not payment_status:
             payment_status = {"never_paid": 0, "partial_paid": 0, "eligible": 0}
         
@@ -3302,8 +4278,13 @@ class AdminDashboard(ctk.CTkFrame):
         ]
         
         # Responsive: layout horizontal ou vertical selon écran
+        is_tiny_finance = self.screen_width < 900
         is_small_screen = self.screen_width < 1000
-        kpi_layout_side = "top" if is_small_screen else "left"  # Vertical si petit écran
+
+        if is_tiny_finance:
+            kpi_rows = [ctk.CTkFrame(kpi_frame), ctk.CTkFrame(kpi_frame)]
+            kpi_rows[0].pack(fill="x", pady=(0, 6))
+            kpi_rows[1].pack(fill="x")
         
         for i, (value, label, color_key, category) in enumerate(kpis):
             color_map = {"green": self.colors["success"], "blue": self.colors["info"], "orange": self.colors["warning"], "red": self.colors["danger"]}
@@ -3313,22 +4294,25 @@ class AdminDashboard(ctk.CTkFrame):
             border_color = "#ffffff" if category == filter_category else color_map[color_key]
             
             kpi_card = ctk.CTkFrame(
-                kpi_frame, 
+                kpi_frame if not is_tiny_finance else kpi_rows[i // 2], 
                 fg_color=color_map[color_key], 
                 corner_radius=8, 
-                height=80 if is_small_screen else 100,
+                height=72 if is_tiny_finance else (80 if is_small_screen else 100),
                 border_width=border_width,
                 border_color=border_color
             )
-            kpi_card.pack(side=kpi_layout_side, fill="both", expand=True, padx=(0 if i == 0 else 3), pady=(0 if i == 0 else 3))
+            if is_tiny_finance:
+                kpi_card.pack(side="left", fill="both", expand=True, padx=(0, 4) if i % 2 == 0 else (4, 0), pady=0)
+            else:
+                kpi_layout_side = "top" if is_small_screen else "left"
+                kpi_card.pack(side=kpi_layout_side, fill="both", expand=True, padx=(0 if i == 0 else 3), pady=(0 if i == 0 else 3))
             kpi_card.pack_propagate(False)
             
             # Rendre la carte cliquable avec le filtre approprié
             kpi_card.configure(cursor="hand2")
             kpi_card.bind("<Button-1>", lambda e, cat=category: self._show_finance(cat))
             
-            # Adaptive font sizes
-            value_font_size = 16 if is_small_screen else 20
+            value_font_size = 14 if is_tiny_finance else (16 if is_small_screen else 20)
             label_font_size = 8 if is_small_screen else 10
             
             value_label = ctk.CTkLabel(kpi_card, text=value, font=ctk.CTkFont(size=value_font_size, weight="bold"), text_color=self.colors["text_white"])
@@ -3336,7 +4320,7 @@ class AdminDashboard(ctk.CTkFrame):
             value_label.bind("<Button-1>", lambda e, cat=category: self._show_finance(cat))
             
             label_widget = ctk.CTkLabel(kpi_card, text=label, font=ctk.CTkFont(size=label_font_size), text_color=self.colors["text_white"])
-            label_widget.pack()
+            label_widget.pack(pady=(0, 8 if is_tiny_finance else 10))
             label_widget.bind("<Button-1>", lambda e, cat=category: self._show_finance(cat))
         
         # === TABLEAU PAIEMENTS ===
@@ -3355,19 +4339,23 @@ class AdminDashboard(ctk.CTkFrame):
             table_card, text=filter_labels.get(filter_category, filter_labels["all"]), font=ctk.CTkFont(size=18, weight="bold"), text_color=self.colors["text_dark"]
         ).pack(anchor="w", padx=25, pady=(20, 15))
         
+        # Zone table alignée (même largeur pour en-tête + lignes)
+        table_zone = ctk.CTkFrame(table_card, fg_color="transparent")
+        table_zone.pack(fill="both", expand=True, padx=25, pady=(0, 20))
+
         # Tableau header
         headers = ["Photo", "Étudiant", "ID", "Montant Payé ($)", "Seuil Requis ($)", "Statut", "Date"]
         layout = self._get_table_layout("finance_payments", len(headers))
         column_weights = layout["weights"]
         header_anchors = layout["anchors"]
         min_widths = layout["min_widths"]
-        self._create_table_header(table_card, headers, column_weights, anchors=header_anchors, min_widths=min_widths, padx=10, pady=10)
+        self._create_table_header(table_zone, headers, column_weights, anchors=header_anchors, min_widths=min_widths, padx=10, pady=10)
         
         # Scroll frame
-        scroll_frame = ctk.CTkScrollableFrame(table_card)
-        scroll_frame.pack(fill="both", expand=True, padx=25, pady=(15, 20))
+        scroll_frame = ctk.CTkScrollableFrame(table_zone, fg_color="transparent")
+        scroll_frame.pack(fill="both", expand=True, padx=0, pady=(15, 0))
         
-        payments = self.dashboard_service.get_students_finance_overview()
+        payments = finance_snapshot["payments"]
         if not payments:
             ctk.CTkLabel(
                 scroll_frame, text="Aucun paiement trouvé.", font=ctk.CTkFont(size=12), text_color=self.colors["text_light"]
@@ -3402,42 +4390,55 @@ class AdminDashboard(ctk.CTkFrame):
             ).pack(pady=20)
             return
         
-        # Afficher les paiements filtrés
-        for payment in filtered_payments:
-            row = ctk.CTkFrame(scroll_frame, fg_color=self.colors["hover"], corner_radius=6)
-            row.pack(fill="x", pady=4)
+        self._cancel_scheduled_renders("finance_")
+        self._render_in_batches(
+            render_key="finance_rows",
+            items=filtered_payments,
+            render_item=lambda payment_item, row_index: self._render_finance_payment_row(
+                scroll_frame, payment_item, column_weights, min_widths, row_index
+            ),
+            batch_size=18,
+            delay_ms=1,
+            on_complete=scroll_frame.update_idletasks,
+        )
 
-            self._configure_table_columns(row, column_weights, min_widths=min_widths)
+    def _render_finance_payment_row(self, parent, payment, column_weights, min_widths, row_index: int = 0):
+        """Rend une ligne de paiement dans la vue finance."""
+        row = ctk.CTkFrame(parent, fg_color=self.colors["hover"], corner_radius=6)
+        row.pack(fill="x", pady=4)
 
-            fullname = f"{payment.get('firstname', '')} {payment.get('lastname', '')}".strip()
-            student_number = payment.get('student_number', '-')
-            amount_paid = Decimal(str(payment.get('amount_paid') or 0))
-            threshold_required = Decimal(str(payment.get('threshold_required') or 0))
-            is_eligible = bool(payment.get('is_eligible')) or (threshold_required > 0 and amount_paid >= threshold_required)
-            last_date = payment.get('last_payment_date') or "-"
+        self._configure_table_columns(row, column_weights, min_widths=min_widths)
 
-            if amount_paid <= 0:
-                status = "Non payé"
-            elif threshold_required > 0 and amount_paid < threshold_required:
-                status = "Partiel"
-            else:
-                status = "Payé"
+        fullname = f"{payment.get('firstname', '')} {payment.get('lastname', '')}".strip()
+        student_number = payment.get('student_number', '-')
+        amount_paid = Decimal(str(payment.get('amount_paid') or 0))
+        threshold_required = Decimal(str(payment.get('threshold_required') or 0))
+        last_date = payment.get('last_payment_date') or "-"
 
-            color = self.colors["success"] if status == "Payé" else (self.colors["warning"] if status == "Partiel" else self.colors["danger"])
-            self._render_photo_cell(
-                row, 0, photo_path=payment.get('passport_photo_path'), photo_blob=payment.get('passport_photo_blob'), size=(36, 44)
-            )
-            row_values = [
-                fullname, student_number, self._format_usd(amount_paid), self._format_usd(threshold_required), status, str(last_date)
-            ]
-            row_colors = [self.colors["text_dark"], self.colors["text_light"], self.colors["success"], self.colors["text_light"], color, self.colors["text_light"]]
-            row_weights = ["normal", "normal", "bold", "normal", "normal", "normal"]
-            layout = self._get_table_layout("finance_payments")
-            row_anchors = layout["anchors"][1:]
-            row_min_widths = min_widths[1:] if min_widths else None
-            self._populate_table_row_with_offset(
-                row, row_values, column_weights, start_col=1, text_colors=row_colors, font_weights=row_weights, anchors=row_anchors, min_widths=row_min_widths
-            )
+        if amount_paid <= 0:
+            status = "Non payé"
+        elif threshold_required > 0 and amount_paid < threshold_required:
+            status = "Partiel"
+        else:
+            status = "Payé"
+
+        color = self.colors["success"] if status == "Payé" else (self.colors["warning"] if status == "Partiel" else self.colors["danger"])
+        self._render_photo_cell(
+            row, 0, photo_path=payment.get('passport_photo_path'), photo_blob=payment.get('passport_photo_blob'), size=(36, 44)
+        )
+
+        row_values = [
+            fullname, student_number, self._format_usd(amount_paid), self._format_usd(threshold_required), status, str(last_date)
+        ]
+        row_colors = [self.colors["text_dark"], self.colors["text_light"], self.colors["success"], self.colors["text_light"], color, self.colors["text_light"]]
+        row_weights = ["normal", "normal", "bold", "normal", "normal", "normal"]
+        layout = self._get_table_layout("finance_payments")
+        row_anchors = layout["anchors"][1:]
+
+        self._populate_table_row_with_offset(
+            row, row_values, column_weights, start_col=1, text_colors=row_colors, font_weights=row_weights, anchors=row_anchors, min_widths=min_widths
+        )
+        self._style_table_row(row, row_index)
     
     def _show_access_logs(self):
         """Affiche les logs d'accès"""
@@ -3490,17 +4491,21 @@ class AdminDashboard(ctk.CTkFrame):
             table_card, text="📊 Détail des Tentatives d'Accès", font=ctk.CTkFont(size=18, weight="bold"), text_color=self.colors["text_dark"]
         ).pack(anchor="w", padx=25, pady=(20, 15))
         
+        # Zone table alignée (même largeur pour en-tête + lignes)
+        table_zone = ctk.CTkFrame(table_card, fg_color="transparent")
+        table_zone.pack(fill="both", expand=True, padx=25, pady=(0, 20))
+
         # Tableau header
         headers = ["Photo", "Étudiant", "ID", "Point d'Accès", "Résultat", "Mot de passe", "Visage", "Finance", "Heure"]
         layout = self._get_table_layout("access_logs", len(headers))
         column_weights = layout["weights"]
         header_anchors = layout["anchors"]
         min_widths = layout["min_widths"]
-        self._create_table_header(table_card, headers, column_weights, anchors=header_anchors, min_widths=min_widths, padx=8, pady=10)
+        self._create_table_header(table_zone, headers, column_weights, anchors=header_anchors, min_widths=min_widths, padx=8, pady=10)
         
         # Scroll frame
-        scroll_frame = ctk.CTkScrollableFrame(table_card)
-        scroll_frame.pack(fill="both", expand=True, padx=25, pady=(15, 20))
+        scroll_frame = ctk.CTkScrollableFrame(table_zone, fg_color="transparent")
+        scroll_frame.pack(fill="both", expand=True, padx=0, pady=(15, 0))
         
         logs = self.dashboard_service.get_access_logs_with_students()
         if not logs:
@@ -3509,7 +4514,7 @@ class AdminDashboard(ctk.CTkFrame):
             ).pack(pady=20)
             return
 
-        for log in logs:
+        for row_index, log in enumerate(logs):
             row = ctk.CTkFrame(scroll_frame, fg_color=self.colors["hover"], corner_radius=6)
             row.pack(fill="x", pady=3)
 
@@ -3535,13 +4540,14 @@ class AdminDashboard(ctk.CTkFrame):
             row_weights = ["normal", "normal", "normal", "bold", "normal", "normal", "normal", "normal"]
             layout = self._get_table_layout("access_logs")
             row_anchors = layout["anchors"][1:]
-            row_min_widths = min_widths[1:] if min_widths else None
+            row_min_widths = min_widths
             self._render_photo_cell(
                 row, 0, photo_path=log.get('passport_photo_path'), photo_blob=log.get('passport_photo_blob'), size=(36, 44)
             )
             self._populate_table_row_with_offset(
                 row, display_row, column_weights, start_col=1, text_colors=cell_colors, font_sizes=[9, 9, 9, 9, 10, 10, 10, 9], font_weights=row_weights, anchors=row_anchors, min_widths=row_min_widths, padx=8, pady=6
             )
+            self._style_table_row(row, row_index)
     
     def _show_reports(self):
         """Affiche les rapports"""
@@ -3568,17 +4574,21 @@ class AdminDashboard(ctk.CTkFrame):
             report_card, text="📊 Statistiques par Faculté", font=ctk.CTkFont(size=18, weight="bold"), text_color=self.colors["text_dark"]
         ).pack(anchor="w", padx=25, pady=(20, 15))
         
+        # Zone table alignée (même largeur pour en-tête + lignes)
+        table_zone = ctk.CTkFrame(report_card, fg_color="transparent")
+        table_zone.pack(fill="both", expand=True, padx=25, pady=(0, 20))
+
         # Tableau header
         headers = ["Photo", "Faculté", "Département", "Total Étudiants", "Éligibles", "% Éligibilité", "Revenus"]
         layout = self._get_table_layout("reports_faculty", len(headers))
         column_weights = layout["weights"]
         header_anchors = layout["anchors"]
         min_widths = layout["min_widths"]
-        self._create_table_header(report_card, headers, column_weights, anchors=header_anchors, min_widths=min_widths, padx=10, pady=10)
+        self._create_table_header(table_zone, headers, column_weights, anchors=header_anchors, min_widths=min_widths, padx=10, pady=10)
         
         # Scroll frame
-        scroll_frame = ctk.CTkScrollableFrame(report_card)
-        scroll_frame.pack(fill="both", expand=True, padx=25, pady=(15, 20))
+        scroll_frame = ctk.CTkScrollableFrame(table_zone, fg_color="transparent")
+        scroll_frame.pack(fill="both", expand=True, padx=0, pady=(15, 0))
         
         faculties_data = self.dashboard_service.get_faculty_stats_with_photos()
         faculty_names = sorted({f.get("faculty_name") for f in faculties_data if f.get("faculty_name")})
@@ -3601,7 +4611,7 @@ class AdminDashboard(ctk.CTkFrame):
                 ).pack(pady=20)
                 return
 
-            for faculty in data:
+            for row_index, faculty in enumerate(data):
                 row = ctk.CTkFrame(scroll_frame, fg_color=self.colors["hover"], corner_radius=6)
                 row.pack(fill="x", pady=4)
 
@@ -3622,10 +4632,11 @@ class AdminDashboard(ctk.CTkFrame):
                 row_weights = ["bold", "normal", "normal", "bold", "bold", "normal"]
                 layout = self._get_table_layout("reports_faculty")
                 row_anchors = layout["anchors"][1:]
-                row_min_widths = min_widths[1:] if min_widths else None
+                row_min_widths = min_widths
                 self._populate_table_row_with_offset(
                     row, row_values, column_weights, start_col=1, text_colors=row_colors, font_weights=row_weights, anchors=row_anchors, min_widths=row_min_widths
                 )
+                self._style_table_row(row, row_index)
 
         render_faculty_stats("Toutes")
         faculty_combo.configure(command=lambda value: render_faculty_stats(value))
@@ -6587,6 +7598,9 @@ class AdminDashboard(ctk.CTkFrame):
     
     def _clear_content(self):
         """Efface le contenu"""
+        self._stop_esp32_status_polling()
+        self._esp32_status_label = None
+        self._cancel_scheduled_renders()
         for widget in self.content_frame.winfo_children():
             widget.destroy()
         if not self._loading_visible:
@@ -6616,6 +7630,7 @@ class AdminDashboard(ctk.CTkFrame):
         """Déconnecte l'utilisateur"""
         logger.info("Déconnexion de l'utilisateur")
         try:
+            self._stop_esp32_status_polling()
             # Afficher un message de déconnexion
             self._show_loading_overlay("Déconnexion en cours...")
             

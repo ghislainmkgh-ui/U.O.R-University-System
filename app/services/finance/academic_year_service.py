@@ -180,6 +180,17 @@ class AcademicYearService:
             logger.error(f"Error getting exam periods: {e}")
             return []
 
+    def delete_exam_period(self, period_id: int) -> bool:
+        """Supprime une période d'examen"""
+        try:
+            query = "DELETE FROM exam_period WHERE exam_period_id = %s"
+            self.db.execute_update(query, (period_id,))
+            logger.info(f"Exam period {period_id} deleted")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting exam period: {e}")
+            return False
+
     def is_within_exam_period(self, academic_year_id: int, when: Optional[datetime] = None) -> bool:
         """Vérifie si la date courante est dans une période d'examen"""
         try:

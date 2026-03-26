@@ -21,6 +21,14 @@ class FinanceService:
         self.academic_service = AcademicYearService()
         self.notification_service = NotificationService()
         self.auth_service = AuthenticationService()
+        self._last_error: Optional[str] = None
+
+    def get_last_error(self) -> Optional[str]:
+        """Retourne la dernière erreur métier rencontrée."""
+        return self._last_error
+
+    def _set_last_error(self, message: Optional[str]):
+        self._last_error = message
 
     def _ensure_payment_history_table(self) -> None:
         """Crée la table d'historique des paiements si nécessaire"""
@@ -191,10 +199,12 @@ class FinanceService:
         NOUVELLE ARCHITECTURE: Utilise les frais/seuils de la PROMOTION de l'étudiant
         """
         try:
+            self._set_last_error(None)
             self._ensure_payment_history_table()
             finance = self.get_student_finance(student_id)
             if not finance:
                 logger.error(f"No finance profile for student {student_id}")
+                self._set_last_error(f"NO_FINANCE_PROFILE: student_id={student_id}")
                 return False
             
             current_paid = Decimal(str(finance['amount_paid']))
@@ -217,6 +227,7 @@ class FinanceService:
             
             if not promo_data or len(promo_data) == 0:
                 logger.error(f"No promotion data found for student {student_id}")
+                self._set_last_error(f"NO_PROMOTION_DATA: student_id={student_id}")
                 return False
             
             promo = promo_data[0]
@@ -230,10 +241,16 @@ class FinanceService:
             # ⚠️ VÉRIFICATION STRICTE: Pas de paiement si aucun frais n'est défini
             if final_fee <= 0:
                 logger.warning(f"Payment rejected for student {student_id}: No active academic fees (final_fee={final_fee})")
+                self._set_last_error(
+                    f"NO_ACTIVE_FEES: student_id={student_id}; promotion={promotion_name}; final_fee={final_fee}"
+                )
                 return False
 
             if final_fee > 0 and new_amount > final_fee:
                 logger.warning(f"Overpayment blocked for student {student_id}: {new_amount} > {final_fee}")
+                self._set_last_error(
+                    f"OVERPAYMENT: student_id={student_id}; attempted_total={new_amount}; final_fee={final_fee}"
+                )
                 return False
 
             is_eligible = 1 if new_amount >= threshold else 0
@@ -307,10 +324,12 @@ class FinanceService:
             threading.Thread(target=_notify_async, daemon=True).start()
 
             logger.info(f"Payment recorded for student {student_id} ({promotion_name}): {amount}")
+            self._set_last_error(None)
             return True
             
         except Exception as e:
             logger.error(f"Error recording payment: {e}")
+            self._set_last_error(f"PAYMENT_EXCEPTION: {e}")
             return False
 
     def get_student_payment_history(self, student_id: int, limit: int = 100) -> list:
@@ -544,7 +563,7 @@ class FinanceService:
                     code_type=access_type,
                     expires_at=expires_at
                 )
-                logger.info(f"✓ Code d'accès {access_type} envoyé à {student.get('email')}")
+                logger.info(f"Code d'accès {access_type} envoyé à {student.get('email')}")
         except Exception as e:
             logger.error(f"Error issuing access code: {e}")
 

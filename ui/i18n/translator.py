@@ -1,4 +1,359 @@
 """Traductions français/anglais"""
+import re
+
+CURRENT_LANGUAGE = "FR"
+
+
+LITERAL_TRANSLATIONS = {
+    "FR": {
+        "FR": "FR",
+        "EN": "EN",
+    },
+    "EN": {
+        "UNIVERSITY OF REDEMPTION": "UNIVERSITY OF REDEMPTION",
+        "Bienvenue dans votre espace d'administration": "Welcome to your administration area",
+        "Connectez-vous pour ouvrir l'application et accéder à votre tableau de bord.": "Log in to open the application and access your dashboard.",
+        "TABLEAU DE BORD ADMIN": "ADMIN DASHBOARD",
+        "Données Académiques": "Academic Data",
+        "Transferts": "Transfers",
+        "Déconnexion": "Logout",
+        "Se déconnecter du système": "Log out of the system",
+        "Mode: Compact": "Mode: Compact",
+        "Mode: Complet": "Mode: Full",
+        "Vue d'ensemble": "Overview",
+        "Chargement...": "Loading...",
+        "Déconnexion en cours...": "Logging out...",
+        "Erreur": "Error",
+        "Succès": "Success",
+        "Attention": "Warning",
+        "Avertissement": "Warning",
+        "Annulé": "Cancelled",
+        "Confirmation": "Confirmation",
+        "Confirmation de déconnexion": "Logout confirmation",
+        "Êtes-vous sûr de vouloir vous déconnecter?\n\nVous devrez vous reconnecter pour accéder au système.": "Are you sure you want to log out?\n\nYou will need to sign in again to access the system.",
+        "Veuillez entrer vos identifiants": "Please enter your credentials",
+        "Connexion échouée": "Login failed",
+        "Authentification validée...": "Authentication validated...",
+        "Initialisation de la page d'accueil...": "Initializing home page...",
+        "Chargement des données...": "Loading data...",
+        "Finalisation...": "Finalizing...",
+        "Initialisation de l'interface...": "Initializing interface...",
+        "Traitement en cours…": "Processing…",
+        "Traitement en cours...": "Processing...",
+        "OAuth validé…": "OAuth validated…",
+        "Token non reçu": "Token not received",
+        "Email introuvable": "Email not found",
+        "Aucune année académique active": "No active academic year",
+        "Veuillez entrer des montants valides (nombres)": "Please enter valid amounts (numbers)",
+        "Tous les champs sont requis.": "All fields are required.",
+        "La date de fin doit être après le début.": "End date must be after start date.",
+        "Format de date invalide. Utilisez AAAA-MM-JJ": "Invalid date format. Use YYYY-MM-DD",
+        "Impossible d'ajouter la période.": "Unable to add the period.",
+        "Veuillez sélectionner un étudiant dans la liste": "Please select a student from the list",
+        "Veuillez entrer le nom du cours": "Please enter the course name",
+        "Veuillez entrer la note": "Please enter the grade",
+        "Note et crédits doivent être des nombres": "Grade and credits must be numeric",
+        "La note doit être entre 0 et 20": "Grade must be between 0 and 20",
+        "Veuillez entrer le titre du document": "Please enter the document title",
+        "Veuillez sélectionner un étudiant": "Please select a student",
+        "Veuillez sélectionner une université de destination": "Please select a destination university",
+        "Format université invalide": "Invalid university format",
+        "Université introuvable": "University not found",
+        "Étudiant introuvable": "Student not found",
+        "Veuillez sélectionner une promotion": "Please select a promotion",
+        "Promotion introuvable": "Promotion not found",
+        "Veuillez indiquer la raison du rejet": "Please provide the rejection reason",
+        "Demande de transfert rejetée": "Transfer request rejected",
+        "Impossible de rejeter la demande": "Unable to reject the request",
+        "Une erreur s'est produite": "An error occurred",
+        "Erreur lors de la mise à jour": "Update error",
+        "Seuils mis à jour avec succès": "Thresholds updated successfully",
+        "Échec": "Failure",
+        "Échec de mise à jour.": "Update failed.",
+        "Veuillez créer l'année académique d'abord dans la section 'Années Académiques'.": "Please create the academic year first in the 'Academic Years' section.",
+        "Fermer": "Close",
+        "Annuler": "Cancel",
+        "Rejeter": "Reject",
+        "Approuver": "Approve",
+        "Aucune faculté trouvée": "No faculty found",
+        "Aucun département trouvé pour cette faculté": "No department found for this faculty",
+        "Aucune promotion trouvée pour ce département": "No promotion found for this department",
+        "Liste des étudiants par promotion": "Student list by promotion",
+        "Informations académiques": "Academic information",
+        "Aperçu": "Preview",
+        "Aperçu photo": "Photo preview",
+        "Historique d'Accès": "Access History",
+        "Détail des Tentatives d'Accès": "Access Attempt Details",
+        "Aucun log trouvé.": "No log found.",
+        "Aucun paiement trouvé.": "No payment found.",
+        "Aucun paiement enregistré.": "No payment recorded.",
+        "Aucune donnée académique": "No academic data",
+        "Dernières Notes": "Latest Grades",
+        "Aucun étudiant sélectionné": "No student selected",
+        "Aucun étudiant trouvé": "No student found",
+        "Aucun étudiant": "No student",
+        "Voir Détails": "View Details",
+        "Aucun transfert enregistré": "No transfer recorded",
+        "Sélectionner un étudiant": "Select a student",
+        "Nom de la période:": "Period name:",
+        "Date début:": "Start date:",
+        "Début:": "Start:",
+        "Fin:": "End:",
+        "Statistiques Académiques": "Academic Statistics",
+        "Comparaison des indicateurs clés": "Key indicators comparison",
+        "Répartition Étudiants": "Student Distribution",
+        "Sources académiques": "Academic sources",
+        "Éligibilité": "Eligibility",
+        "Journaux d'Accès": "Access Logs",
+        "Consultez l'historique et les logs\nd'accès aux examens en temps réel.": "View exam access history and logs in real time.",
+        "Voir les logs →": "View logs →",
+        "Résumé Financier": "Financial Summary",
+        "Voir finances →": "View finance →",
+        "Communication ESP32 (Wi‑Fi)": "ESP32 Communication (Wi‑Fi)",
+        "Statut: En attente de connexion ESP32": "Status: Waiting for ESP32 connection",
+        "Année académique:": "Academic year:",
+        "Sélectionnez une Faculté": "Select a Faculty",
+        "Cliquez sur une faculté pour voir ses départements": "Click a faculty to view its departments",
+        "Cliquez sur un département pour voir ses promotions": "Click a department to view its promotions",
+        "Nouvel Étudiant": "New Student",
+        "Remplissez tous les champs requis": "Fill in all required fields",
+        "Informations personnelles": "Personal information",
+        "Photo du visage (passeport)": "Face photo (passport style)",
+        "Parcourir": "Browse",
+        "Fond neutre • Visage centré • Une seule personne • Bonne lumière": "Neutral background • Centered face • Single person • Good lighting",
+        "Modifier Étudiant": "Edit Student",
+        "Valider": "Validate",
+        "Enregistrer": "Save",
+        "Enregistrer un Paiement": "Record a Payment",
+        "Montant à payer": "Amount to pay",
+        "Entrez le montant (ex: 50.00)": "Enter amount (e.g. 50.00)",
+        "Enregistrer le Paiement": "Save Payment",
+        "Historique des Paiements": "Payment History",
+        "Filtrer par:": "Filter by:",
+        "Statistiques par Faculté": "Statistics by Faculty",
+        "Aucune statistique disponible.": "No statistics available.",
+        "Frais & Seuils par Faculté → Promotion": "Fees & Thresholds by Faculty → Promotion",
+        "Gérer les Périodes d'Examens": "Manage Exam Periods",
+        "EMAIL NOTIFICATION": "EMAIL NOTIFICATION",
+        "MESSAGE WHATSAPP": "WHATSAPP MESSAGE",
+        "Gestion des Périodes d'Examens": "Exam Period Management",
+        "Créez et organisez les sessions d'examen pour l'année académique": "Create and organize exam sessions for the academic year",
+        "Ajouter une Période d'Examen": "Add an Exam Period",
+        "Périodes Actuelles": "Current Periods",
+        "Aucune période d'examen définie pour cette année.": "No exam period defined for this year.",
+        "Initialisation...": "Initializing...",
+        "Valider & Notifier": "Validate & Notify",
+        "Gestion des Données Académiques": "Academic Data Management",
+        "Ajouter les Données Académiques par Étudiant": "Add Academic Data by Student",
+        "Gestion des notes, documents et certificats pour chaque étudiant": "Manage grades, documents, and certificates for each student",
+        "Sélectionner un Étudiant": "Select a Student",
+        "Faculté *": "Faculty *",
+        "Département *": "Department *",
+        "Promotion *": "Promotion *",
+        "Rechercher un Étudiant": "Search a Student",
+        "Nom, prénom ou numéro d'étudiant...": "Name, first name, or student number...",
+        "Étudiants de la Promotion": "Students in Promotion",
+        "Données Académiques Existantes": "Existing Academic Data",
+        "Les données s'afficheront ici...": "Data will appear here...",
+        "Ajouter les Données": "Add Data",
+        "Documents": "Documents",
+        "Nom du Cours *": "Course Name *",
+        "Code du Cours": "Course Code",
+        "Note (sur 20) *": "Grade (out of 20) *",
+        "Date d'Examen": "Exam Date",
+        "Professeur": "Professor",
+        "Nom du professeur": "Professor name",
+        "Ajouter la Note": "Add Grade",
+        "Type de Document *": "Document Type *",
+        "Titre du Document *": "Document Title *",
+        "Auteur": "Author",
+        "Description": "Description",
+        "Ajouter le Document": "Add Document",
+        "Transferts Inter-Universitaires": "Inter-University Transfers",
+        "Initier un Transfert Sortant": "Initiate Outgoing Transfer",
+        "Sélection Hiérarchique": "Hierarchical Selection",
+        "Faculté :": "Faculty:",
+        "Département :": "Department:",
+        "Promotion :": "Promotion:",
+        "Étudiants": "Students",
+        "Rechercher :": "Search:",
+        "Nom, Numéro ou Email": "Name, Number or Email",
+        "Informations Étudiant": "Student Information",
+        "Détails du Transfert": "Transfer Details",
+        "Université de destination :": "Destination University:",
+        "URL API de réception (modifiable) :": "Receiving API URL (editable):",
+        "Sauvegarder l'URL API": "Save API URL",
+        "Inclure les documents et ouvrages": "Include documents and works",
+        "Notes (optionnel) :": "Notes (optional):",
+        "Générer": "Generate",
+        "Rafraîchir": "Refresh",
+        "Aucun étudiant actif\ndans cette promotion": "No active student\nin this promotion",
+        "Demandes de Transfert Entrantes": "Incoming Transfer Requests",
+        "Aucune demande de transfert en attente": "No pending transfer request",
+        "EN ATTENTE": "PENDING",
+        "Approuver": "Approve",
+        "Rejeter": "Reject",
+        "Historique des Transferts": "Transfer History",
+        "Erreur lors de l'affichage des informations": "Error displaying information",
+        "Notes d'approbation:": "Approval notes:",
+    },
+}
+
+
+TERM_TRANSLATIONS = {
+    "EN": {
+        "Année académique": "Academic year",
+        "Années académiques": "Academic years",
+        "Période d'examen": "Exam period",
+        "Périodes d'examens": "Exam periods",
+        "Période": "Period",
+        "Périodes": "Periods",
+        "Faculté": "Faculty",
+        "Facultés": "Faculties",
+        "faculté": "faculty",
+        "facultés": "faculties",
+        "Département": "Department",
+        "Départements": "Departments",
+        "département": "department",
+        "départements": "departments",
+        "Promotion": "Promotion",
+        "Promotions": "Promotions",
+        "promotion": "promotion",
+        "promotions": "promotions",
+        "Étudiant": "Student",
+        "Étudiants": "Students",
+        "Étudiante": "Student",
+        "Étudiantes": "Students",
+        "étudiant": "student",
+        "étudiants": "students",
+        "étudiante": "student",
+        "étudiantes": "students",
+        "Inscrits": "Registered",
+        "Inscrit": "Registered",
+        "inscrits": "registered",
+        "inscrit": "registered",
+        "Sélectionner": "Select",
+        "Sélectionnez": "Select",
+        "sélectionnez": "select",
+        "Ajouter": "Add",
+        "ajouter": "add",
+        "Modifier": "Edit",
+        "modifier": "edit",
+        "Supprimer": "Delete",
+        "supprimer": "delete",
+        "Gérer": "Manage",
+        "Gestion": "Management",
+        "Données": "Data",
+        "Donnée": "Data",
+        "Académiques": "Academic",
+        "Académique": "Academic",
+        "académiques": "academic",
+        "académique": "academic",
+        "Historique": "History",
+        "Accès": "Access",
+        "Tentatives": "Attempts",
+        "Répartition": "Distribution",
+        "Résumé": "Summary",
+        "Financier": "Financial",
+        "Finances": "Finance",
+        "Voir": "View",
+        "Rapport": "Report",
+        "Aucun": "No",
+        "Aucune": "No",
+        "trouvé": "found",
+        "trouvée": "found",
+        "trouvés": "found",
+        "trouvées": "found",
+        "introuvable": "not found",
+        "liste": "list",
+        "cours": "course",
+        "note": "grade",
+        "notes": "grades",
+        "Crédits": "Credits",
+        "Titre": "Title",
+        "Catégorie": "Category",
+        "Rafraîchir": "Refresh",
+        "Réinitialiser": "Reset",
+        "Générer": "Generate",
+        "Université": "University",
+        "destination": "destination",
+        "Informations": "Information",
+        "détails": "details",
+        "Détails": "Details",
+        "Rechercher": "Search",
+    }
+}
+
+
+def set_current_language(language: str):
+    """Met à jour la langue UI globale active."""
+    global CURRENT_LANGUAGE
+    CURRENT_LANGUAGE = language if language in TRANSLATIONS else "FR"
+
+
+def get_current_language() -> str:
+    """Retourne la langue UI globale active."""
+    return CURRENT_LANGUAGE if CURRENT_LANGUAGE in TRANSLATIONS else "FR"
+
+
+def translate_ui_text(text, language: str = None):
+    """Traduit un texte littéral selon la langue active.
+
+    - FR: retourne le texte tel quel
+    - EN: applique d'abord les traductions exactes puis des remplacements de fragments
+    """
+    if not isinstance(text, str):
+        return text
+
+    target_lang = language if language in TRANSLATIONS else get_current_language()
+    if target_lang == "FR":
+        return text
+
+    lang_map = LITERAL_TRANSLATIONS.get(target_lang, {})
+    translated = lang_map.get(text, text)
+
+    # Traduction via correspondance exacte de valeurs FR issues des clés i18n
+    if translated == text and target_lang != "FR":
+        fr_dict = TRANSLATIONS.get("FR", {})
+        target_dict = TRANSLATIONS.get(target_lang, {})
+        fr_to_key = {}
+        for k, v in fr_dict.items():
+            if isinstance(v, str) and v not in fr_to_key:
+                fr_to_key[v] = k
+        key = fr_to_key.get(text)
+        if key:
+            maybe = target_dict.get(key)
+            if isinstance(maybe, str) and maybe:
+                translated = maybe
+
+    # Remplacements contextuels (du plus long au plus court)
+    for src, dst in sorted(lang_map.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if src in translated:
+            translated = translated.replace(src, dst)
+
+    needs_fallback = (translated == text)
+
+    # Remplacements dérivés du dictionnaire FR -> langue cible (par fragments)
+    if target_lang != "FR" and needs_fallback:
+        fr_dict = TRANSLATIONS.get("FR", {})
+        target_dict = TRANSLATIONS.get(target_lang, {})
+        fr_pairs = []
+        for k, fr_text in fr_dict.items():
+            tgt_text = target_dict.get(k)
+            if isinstance(fr_text, str) and isinstance(tgt_text, str) and fr_text and tgt_text and fr_text != tgt_text:
+                fr_pairs.append((fr_text, tgt_text))
+        for src, dst in sorted(fr_pairs, key=lambda kv: len(kv[0]), reverse=True):
+            if src in translated:
+                translated = translated.replace(src, dst)
+
+    # Glossaire de termes métier (fallback)
+    if needs_fallback:
+        term_map = TERM_TRANSLATIONS.get(target_lang, {})
+        for src, dst in sorted(term_map.items(), key=lambda kv: len(kv[0]), reverse=True):
+            pattern = re.compile(rf"(?<!\w){re.escape(src)}(?!\w)")
+            translated = pattern.sub(dst, translated)
+
+    return translated
 
 TRANSLATIONS = {
     "FR": {
@@ -172,6 +527,37 @@ TRANSLATIONS = {
         "date_format": "%d/%m/%Y",
         "time_format": "%H:%M:%S",
         "datetime_format": "%d/%m/%Y %H:%M",
+
+        # Écran de connexion
+        "user_login": "CONNEXION UTILISATEUR",
+        "email_id": "\U0001f4e7  Email / Identifiant",
+        "password_label": "\U0001f512  Mot de passe",
+        "forgot_password": "Mot de passe oublié ?",
+        "login_btn": "CONNEXION",
+        "create_admin_btn": "CRÉER COMPTE",
+        "create_admin_title": "Créer un compte administrateur",
+        "create_admin_username_ph": "admin.username",
+        "create_admin_email_ph": "admin@example.com",
+        "create_admin_success": "Compte administrateur créé avec succès ✓",
+        "create_admin_min_length": "Le mot de passe doit avoir au moins 6 caractères",
+        "or_separator": "ou",
+        "login_google": "  G   Continuer avec Google",
+        "login_github": "  ⬡   Continuer avec GitHub",
+        "enter_credentials": "Veuillez entrer vos identifiants",
+
+        # Dialogue mot de passe oublié
+        "fp_title": "Réinitialiser le mot de passe",
+        "fp_identifier_label": "Email ou matricule",
+        "fp_identifier_ph": "email@example.com ou MAT2024001",
+        "fp_new_password": "Nouveau mot de passe",
+        "fp_confirm_password": "Confirmer le mot de passe",
+        "fp_reset_btn": "Réinitialiser",
+        "fp_cancel_btn": "Annuler",
+        "fp_no_match": "Les mots de passe ne correspondent pas",
+        "fp_missing_fields": "Veuillez remplir tous les champs",
+        "fp_not_found": "Aucun compte trouvé pour cet identifiant",
+        "fp_success": "Mot de passe réinitialisé avec succès ✓",
+        "fp_min_length": "Le mot de passe doit avoir au moins 4 caractères",
     },
     "EN": {
         # Language and platform
@@ -344,6 +730,37 @@ TRANSLATIONS = {
         "date_format": "%d/%m/%Y",
         "time_format": "%H:%M:%S",
         "datetime_format": "%d/%m/%Y %H:%M",
+
+        # Login screen
+        "user_login": "USER LOGIN",
+        "email_id": "\U0001f4e7  Email / Username",
+        "password_label": "\U0001f512  Password",
+        "forgot_password": "Forgot Password?",
+        "login_btn": "LOGIN",
+        "create_admin_btn": "CREATE ACCOUNT",
+        "create_admin_title": "Create administrator account",
+        "create_admin_username_ph": "admin.username",
+        "create_admin_email_ph": "admin@example.com",
+        "create_admin_success": "Administrator account created successfully ✓",
+        "create_admin_min_length": "Password must be at least 6 characters",
+        "or_separator": "or",
+        "login_google": "  G   Continue with Google",
+        "login_github": "  ⬡   Continue with GitHub",
+        "enter_credentials": "Please enter your credentials",
+
+        # Forgot password dialog
+        "fp_title": "Reset Password",
+        "fp_identifier_label": "Email or student ID",
+        "fp_identifier_ph": "email@example.com or ID2024001",
+        "fp_new_password": "New password",
+        "fp_confirm_password": "Confirm password",
+        "fp_reset_btn": "Reset",
+        "fp_cancel_btn": "Cancel",
+        "fp_no_match": "Passwords do not match",
+        "fp_missing_fields": "Please fill in all fields",
+        "fp_not_found": "No account found for this identifier",
+        "fp_success": "Password reset successfully ✓",
+        "fp_min_length": "Password must be at least 4 characters",
     }
 }
 
@@ -353,11 +770,13 @@ class Translator:
     
     def __init__(self, language: str = "FR"):
         self.language = language if language in TRANSLATIONS else "FR"
+        set_current_language(self.language)
     
     def set_language(self, language: str):
         """Change la langue"""
         if language in TRANSLATIONS:
             self.language = language
+            set_current_language(language)
             return True
         return False
     
@@ -369,3 +788,7 @@ class Translator:
     def _(self, key: str) -> str:
         """Alias pour get()"""
         return self.get(key)
+
+    def translate_literal(self, text: str) -> str:
+        """Traduit un texte littéral non basé sur une clé i18n."""
+        return translate_ui_text(text, self.language)

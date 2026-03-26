@@ -33,5 +33,5 @@ class ESP32StatusService:
                     return ESP32Status("ESP32 connecté (Wi‑Fi OK)", "#10b981")
                 return ESP32Status("ESP32 connecté (réponse inconnue)", "#f59e0b")
         except Exception as e:
-            logger.info(f"ESP32 status check failed: {e}")
+            logger.debug(f"ESP32 status check failed: {e}")
             return ESP32Status("ESP32 non connecté (mode simulation)", "#f59e0b")

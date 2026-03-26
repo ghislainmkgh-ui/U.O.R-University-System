@@ -2,6 +2,7 @@
 import logging
 import smtplib
 import os
+import html
 import requests
 from email.mime.image import MIMEImage
 from email.mime.text import MIMEText
@@ -47,6 +48,37 @@ class NotificationService:
             "email_configured": email_ok,
             "whatsapp_configured": whatsapp_ok
         }
+
+    def _normalize_notification_text(self, text: str) -> str:
+        """Normalise le texte pour un rendu cohérent Email/WhatsApp."""
+        if text is None:
+            return ""
+        # Supprimer les espaces de fin de ligne sans casser la structure
+        lines = [line.rstrip() for line in str(text).splitlines()]
+        # Réduire les blocs de lignes vides successives (max 1 ligne vide)
+        normalized = []
+        empty_streak = 0
+        for line in lines:
+            if line.strip() == "":
+                empty_streak += 1
+                if empty_streak > 1:
+                    continue
+            else:
+                empty_streak = 0
+            normalized.append(line)
+        return "\n".join(normalized).strip()
+
+    def _build_html_from_plain_text(self, body: str) -> str:
+        """Construit un HTML lisible à partir du texte brut pour garder la même structure."""
+        normalized = self._normalize_notification_text(body)
+        escaped = html.escape(normalized)
+        return (
+            "<div style=\"font-family:Arial, sans-serif; color:#111; line-height:1.5;\">"
+            "<div style=\"background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; padding:14px;\">"
+            f"<pre style=\"margin:0; white-space:pre-wrap; word-break:break-word; font-family:Arial, sans-serif; font-size:14px;\">{escaped}</pre>"
+            "</div>"
+            "</div>"
+        )
     
     def send_payment_notification(self, student_email: str, student_phone: str,
                                  student_name: str, amount_paid: float,
@@ -104,23 +136,7 @@ Votre paiement a été reçu avec succès.
 
             body += "\n\nCordialement,\nU.O.R - Système de Contrôle d'Accès"
 
-            whatsapp_rows = []
-            if promotion_info:
-                whatsapp_rows.append(("Promo", promotion_info))
-            whatsapp_rows.extend([
-                ("Payé", f"${amount_paid_usd:,.2f}"),
-                ("Reste", f"${remaining_usd:,.2f}"),
-            ])
-            if threshold_usd is not None:
-                whatsapp_rows.append(("Seuil", f"${threshold_usd:,.2f}"))
-            if threshold_status:
-                whatsapp_rows.append(("Statut", threshold_status))
-
-            whatsapp_msg = f"Bonjour {student_name}, paiement reçu.\n{self._build_text_table(whatsapp_rows)}"
-            if remaining_amount <= 0:
-                whatsapp_msg += " Félicitations! Vous avez fini les frais académiques."
-            if threshold_status == "Non atteint":
-                whatsapp_msg += " Vous n'avez pas encore atteint le seuil requis."
+            whatsapp_msg = self._normalize_notification_text(body)
 
             html_body = self._build_payment_email_html(
                 student_name=student_name,
@@ -205,13 +221,7 @@ Cordialement,
 U.O.R - Système de Contrôle d'Accès
             """.strip()
 
-            whatsapp_msg = (
-                f"Bienvenue {student_name} à l'Université Officielle de Ruwenzori (U.O.R)! "
-                f"Matricule étudiant: {student_number}. "
-                f"Seuil examens: ${threshold_required:,.2f}. "
-                f"Frais totaux: ${final_fee:,.2f}. "
-                f"Un code d'accès vous sera envoyé par email/WhatsApp après paiement du seuil."
-            )
+            whatsapp_msg = self._normalize_notification_text(body)
 
             email_ok = self._send_email(student_email, subject, body)
             whatsapp_ok = self._send_whatsapp(student_phone, whatsapp_msg)
@@ -249,7 +259,7 @@ Cordialement,
 U.O.R - Système de Contrôle d'Accès
             """.strip()
             
-            whatsapp_msg = f"Bonjour {student_name}, votre code d'accès: {access_code}. {validity_msg}"
+            whatsapp_msg = self._normalize_notification_text(body)
             
             email_ok = self._send_email(student_email, subject, body)
             whatsapp_ok = self._send_whatsapp(student_phone, whatsapp_msg)
@@ -318,23 +328,7 @@ U.O.R - Système de Contrôle d'Accès
             ])
             body = "\n".join(body_lines).strip()
 
-            parts = [f"Bonjour {student_name}, mise à jour du seuil financier."]
-            if old_usd is not None and new_usd is not None:
-                parts.append(f"Seuil: ${old_usd:,.2f} → ${new_usd:,.2f}.")
-            elif new_usd is not None:
-                parts.append(f"Nouveau seuil: ${new_usd:,.2f}.")
-            if old_fee_usd is not None and new_fee_usd is not None:
-                parts.append(f"Frais: ${old_fee_usd:,.2f} → ${new_fee_usd:,.2f}.")
-            elif new_fee_usd is not None:
-                parts.append(f"Nouveaux frais: ${new_fee_usd:,.2f}.")
-            if threshold_status:
-                parts.append(f"Statut seuil: {threshold_status}.")
-            parts.append("Votre code temporaire a été invalidé si applicable.")
-
-            whatsapp_table = self._build_text_table(table_rows) if table_rows else ""
-            whatsapp_msg = " ".join(parts)
-            if whatsapp_table:
-                whatsapp_msg += f"\n{whatsapp_table}"
+            whatsapp_msg = self._normalize_notification_text(body)
 
             html_body = self._build_threshold_change_email_html(
                 student_name=student_name,
@@ -358,6 +352,9 @@ U.O.R - Système de Contrôle d'Accès
             if not self.email_address or not self.email_password:
                 logger.warning("Email service not configured")
                 return False
+
+            if not html_body:
+                html_body = self._build_html_from_plain_text(body)
 
             use_logo = bool(logo_path and os.path.exists(logo_path))
             if html_body or use_logo:
@@ -417,29 +414,80 @@ U.O.R - Système de Contrôle d'Accès
             if not to_number.startswith("+"):
                 to_number = "+" + to_number
             
-            logger.info(f"Sending WhatsApp - Original: {original_phone}, Normalized: {to_number}, Instance: {self.ultramsg_instance}")
-            
-            # API Ultramsg
-            url = f"https://api.ultramsg.com/{self.ultramsg_instance}/messages/chat"
+            raw_instance = str(self.ultramsg_instance).strip().strip("/")
+            instance_candidates = []
+
+            def add_candidate(value: str):
+                cleaned = str(value or "").strip().strip("/")
+                if cleaned and cleaned not in instance_candidates:
+                    instance_candidates.append(cleaned)
+
+            # Priorité au format configuré (ne pas casser ce qui fonctionne déjà)
+            add_candidate(raw_instance)
+
+            # Fallbacks utiles si l'instance est mal formatée
+            if raw_instance.lower().startswith("instance"):
+                suffix = raw_instance[len("instance"):].strip()
+                add_candidate(suffix)
+            else:
+                add_candidate(f"instance{raw_instance}")
+
             payload = {
                 "token": self.ultramsg_token,
                 "to": to_number,
                 "body": message
             }
-            
-            logger.debug(f"Ultramsg API URL: {url}, Payload keys: {list(payload.keys())}")
-            
-            response = requests.post(url, data=payload, timeout=10)
-            response.raise_for_status()
-            
-            result = response.json()
-            logger.info(f"Ultramsg API response: {result}")
-            if result.get("sent") == "true" or result.get("sent") == True:
-                logger.info(f"WhatsApp sent successfully to {to_number}")
-                return True
-            else:
-                logger.error(f"Ultramsg sent=false - Response: {result}")
-                return False
+
+            logger.info(
+                f"Sending WhatsApp - Original: {original_phone}, Normalized: {to_number}, "
+                f"Instance candidates: {instance_candidates}"
+            )
+
+            last_error_detail = None
+            for idx, instance_id in enumerate(instance_candidates, start=1):
+                url = f"https://api.ultramsg.com/{instance_id}/messages/chat"
+                logger.debug(f"Ultramsg attempt {idx}/{len(instance_candidates)} URL: {url}")
+
+                response = requests.post(url, data=payload, timeout=10)
+                response_text = response.text
+                try:
+                    result = response.json()
+                except Exception:
+                    result = {"raw": response_text}
+
+                # Succès HTTP
+                if response.ok:
+                    logger.info(f"Ultramsg API response ({instance_id}): {result}")
+                    if result.get("sent") == "true" or result.get("sent") is True:
+                        logger.info(f"WhatsApp sent successfully to {to_number} via instance '{instance_id}'")
+                        return True
+
+                    logger.error(f"Ultramsg sent=false via instance '{instance_id}' - Response: {result}")
+                    last_error_detail = f"sent=false via {instance_id}: {result}"
+                    # sent=false = échec métier, ne pas réessayer avec d'autres formats
+                    break
+
+                # Erreur HTTP
+                logger.error(
+                    f"Ultramsg HTTP {response.status_code} via instance '{instance_id}' - "
+                    f"Response: {response_text}"
+                )
+                lower_text = str(response_text).lower()
+                if "stopped due to non-payment" in lower_text or "non-payment" in lower_text:
+                    last_error_detail = (
+                        "instance stopped due to non-payment. "
+                        "Reactivate Ultramsg subscription, then retry sending."
+                    )
+                    break
+
+                last_error_detail = f"http={response.status_code} via {instance_id}: {response_text}"
+
+                # Sur 404 on tente un autre format d'instance, sinon on arrête
+                if response.status_code != 404:
+                    break
+
+            logger.error(f"WhatsApp send failed. Last detail: {last_error_detail}")
+            return False
             
         except requests.exceptions.RequestException as e:
             logger.error(f"WhatsApp API network error via Ultramsg: {type(e).__name__}: {e}")

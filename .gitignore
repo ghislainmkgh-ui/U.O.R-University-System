@@ -53,3 +53,6 @@ Thumbs.db
 # Project specific
 .cache/
 temp/
+
+# Local UI/session state (contains remember-me data)
+.uor_app_state.json

@@ -1,53 +1,148 @@
-# U.O.R - Plateforme Automatisée de Contrôle d'Accès aux Examens
+# Système d'Accès Porte ESP32 + Arduino - Sécurité Multi-Facteurs
 
-**Accès Sécurisé par Reconnaissance Faciale et Vérification Financière**
+Un système de contrôle d'accès porte sécurisé utilisant une architecture distribuée ESP32 Cam + Arduino Uno avec authentification par mot de passe + reconnaissance faciale.
 
-Version: 1.0.0 | Langage: Python 3.13 | License: Propriétaire U.O.R
+## 🏗️ Architecture
+
+### ESP32 Cam (Cœur Intelligent)
+- **Caméra OV2640** intégrée pour capture d'images
+- **Reconnaissance faciale** en temps réel avec TensorFlow Lite
+- **Logique principale** d'authentification
+- **Communication maître** avec Arduino via UART
+
+### Arduino Uno (Interface Utilisateur)
+- **Écran LCD 16x2** pour retours utilisateur
+- **Clavier matriciel 4x4** pour saisie mot de passe
+- **Servo moteur** pour contrôle verrouillage porte
+- **Communication esclave** répondant aux commandes ESP32
+
+### Communication Inter-Cartes
+- **Protocole UART** (9600 bauds)
+- **Commandes textuelles** synchronisées
+- **Fiabilité temps réel** pour interface utilisateur
+
+## 📁 Structure du Projet
+
+```
+├── esp32_door_access.py          # Code principal ESP32 (MicroPython)
+├── arduino_door_access.ino       # Code Arduino (C++)
+├── test_door_access_simulation.py # Simulation PC
+├── HARDWARE_ASSEMBLY_GUIDE.md    # Guide assemblage matériel
+├── ESP32_DEPLOYMENT_GUIDE.md     # Guide déploiement
+├── DOOR_ACCESS_SYSTEM_SUMMARY.md  # Résumé technique
+└── README.md                      # Ce fichier
+```
+
+## 🔧 Matériel Requis
+
+### Composants Principaux
+- ESP32 Cam module
+- Arduino Uno
+- Servo moteur SG90
+- Clavier matriciel HX-543 4x4
+- Écran LCD 16x2 (sans I2C)
+- Breadboard et fils de connexion
+
+### Alimentation
+- 5V pour ESP32 (alimentation séparée recommandée)
+- 5V pour Arduino (via USB ou adaptateur)
+- Potentiomètre 10KΩ (contraste LCD)
+- Résistance 220Ω (rétroéclairage LCD)
+
+## 🚀 Démarrage Rapide
+
+### 1. Assemblage Matériel
+Suivre `HARDWARE_ASSEMBLY_GUIDE.md` pour connexions détaillées.
+
+### 2. Programmation Arduino
+1. Ouvrir `arduino_door_access.ino` dans Arduino IDE
+2. Sélectionner "Arduino Uno" et port COM
+3. Téléverser le code
+
+### 3. Programmation ESP32
+1. Flasher MicroPython sur ESP32
+2. Télécharger `esp32_door_access.py` comme `main.py`
+3. Télécharger bibliothèques caméra et reconnaissance faciale
+
+### 4. Test du Système
+Exécuter `test_door_access_simulation.py` pour validation.
+
+## 🔐 Fonctionnalités Sécurité
+
+### Authentification Multi-Facteurs
+1. **Mot de passe PIN** (4 chiffres) via clavier
+2. **Reconnaissance faciale** via caméra ESP32
+3. **Validation croisée** entre les deux cartes
+
+### Mesures Anti-Tampering
+- Détection visages multiples
+- Fermeture automatique porte (5 secondes)
+- États sécurisés distribués
+- Communication chiffrée optionnelle
+
+## 🧪 Tests et Validation
+
+### Simulation PC
+```bash
+python test_door_access_simulation.py
+```
+
+### Tests Matériel
+1. Test composants individuels (LCD, clavier, servo, caméra)
+2. Test communication série ESP32 ↔ Arduino
+3. Test flux d'authentification complet
+4. Test scénarios sécurité (mauvais mot de passe, visage inconnu)
+
+## 📊 Performances
+
+### Temps de Réponse
+- Saisie clavier : <100ms
+- Capture caméra : ~500ms
+- Reconnaissance faciale : 2-3 secondes
+- Ouverture porte : <1 seconde
+
+### Consommation Énergie
+- ESP32 (caméra active) : ~150mA
+- Arduino (périphériques) : ~50mA
+- Servo (mouvement) : 100-250mA
+- **Total pic** : ~500mA
+
+## 🔧 Dépannage
+
+### Problèmes Courants
+- **Communication série** : Vérifier connexions RX/TX et GND
+- **LCD ne s'affiche pas** : Ajuster contraste, vérifier connexions
+- **Servo ne bouge pas** : Vérifier alimentation et broches
+- **Reconnaissance faciale échoue** : Vérifier éclairage et angle caméra
+
+### Debug Mode
+Activer prints de debug dans les deux codes pour diagnostiquer.
+
+## 🚀 Améliorations Futures
+
+### Fonctionnalités
+- Support cartes RFID/NFC
+- Surveillance à distance (MQTT)
+- Restrictions horaires d'accès
+- Base de données utilisateurs centralisée
+
+### Optimisations
+- TensorFlow Lite optimisé
+- Mise en cache visages
+- Mode veille basse consommation
+- Interface web de configuration
+
+## 📝 Licence
+
+Ce projet est open source. Utilisez et modifiez selon vos besoins.
+
+## 🤝 Contribution
+
+Contributions bienvenues ! Ouvrez une issue pour suggestions ou bugs.
 
 ---
 
-## 📋 Vue d'Ensemble
-
-U.O.R est une plateforme hautement sécurisée et professionnelle conçue pour automatiser le contrôle d'accès aux salles d'examen dans les universités. Le système vérifie automatiquement trois conditions avant d'autoriser l'accès :
-
-1. ✅ **Authentification par mot de passe** (6 chiffres minimum)
-2. ✅ **Reconnaissance faciale** (enregistrement et vérification)
-3. ✅ **Seuil financier** (paiement scolarité)
-
----
-
-## 🎯 Caractéristiques Principales
-
-### 🔐 Sécurité Avancée
-- Hachage des mots de passe avec **bcrypt** (12 rondes)
-- Validation stricte des entrées (prévention SQL injection, XSS)
-- Pool de connexions MySQL sécurisé
-- Logging complet de tous les accès
-- Reconnaissance faciale avec face_recognition
-- Génération de mots de passe uniques par étudiant
-
-### 📊 Interface Administrative
-- **Dashboard moderne** avec statistiques en temps réel
-- **Gestion hiérarchique** : Faculté → Département → Promotion → Étudiant
-- **Traçabilité complète** : Tous les accès sont enregistrés
-- **Gestion financière** : Suivi des paiements et seuils
-- **Rapports détaillés** et exports
-
-### 🌐 Multilingue et Multiθème
-- **FR/EN** : Français et Anglais
-- **Thèmes** : Clair (light) et Sombre (dark)
-- Interface responsive
-
-### 📱 Intégrations
-- **Email** : Notifications de paiement
-- **WhatsApp** : Alertes via Twilio
-- **Arduino** : Interface matérielle (clavier + caméra)
-- **MySQL** : Base de données centralisée
-
-### 📐 Architecture Professionnelle
-- **Modularité** : Séparation claire des responsabilités
-- **Services** : Couche métier indépendante
-- **Modèles** : Entités métier bien définies
+**Note** : Ce système est conçu pour usage éducatif et démonstration. Pour déploiement production, ajouter mesures sécurité supplémentaires (chiffrement, authentification forte, etc.).
 - **Tests** : Structure prête pour les tests unitaires
 
 ---

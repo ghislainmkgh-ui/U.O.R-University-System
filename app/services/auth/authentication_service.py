@@ -17,6 +17,14 @@ class AuthenticationService:
         self.db = DatabaseConnection()
         self.password_hasher = PasswordHasher()
         self.validators = Validators()
+        self._last_error = None
+
+    def get_last_error(self) -> Optional[str]:
+        """Retourne le dernier message d'erreur métier/technique."""
+        return self._last_error
+
+    def _set_last_error(self, message: Optional[str]):
+        self._last_error = message
 
     def _get_table_columns(self, table_name: str) -> set:
         try:
@@ -170,6 +178,68 @@ class AuthenticationService:
         except Exception as e:
             logger.error(f"Error authenticating by email: {e}")
             return None, "Authentication error"
+
+    def register_admin_account(self, username: str, email: str, password: str) -> tuple:
+        """Crée un compte administrateur (table `administrator`).
+
+        Returns:
+            (success: bool, message: str)
+        """
+        try:
+            username = (username or "").strip()
+            email = (email or "").strip().lower()
+            password = (password or "").strip()
+
+            if not username or not email or not password:
+                return False, "Username, email et mot de passe requis"
+            if len(password) < 6:
+                return False, "Le mot de passe doit avoir au moins 6 caractères"
+
+            columns = self._get_table_columns("administrator")
+            if not columns:
+                return False, "Table administrator introuvable"
+            if "username" not in columns or "password_hash" not in columns:
+                return False, "La table administrator ne contient pas les colonnes requises"
+
+            existing = self.db.execute_query(
+                "SELECT id FROM administrator WHERE username = %s",
+                (username,),
+            )
+            if existing:
+                return False, "Ce nom d'utilisateur admin existe déjà"
+
+            if "email" in columns:
+                existing_email = self.db.execute_query(
+                    "SELECT id FROM administrator WHERE LOWER(email) = %s",
+                    (email,),
+                )
+                if existing_email:
+                    return False, "Cet email admin existe déjà"
+
+            password_hash = self.password_hasher.hash_password(password)
+
+            insert_columns = ["username", "password_hash"]
+            insert_values = [username, password_hash]
+
+            if "email" in columns:
+                insert_columns.append("email")
+                insert_values.append(email)
+            if "is_active" in columns:
+                insert_columns.append("is_active")
+                insert_values.append(1)
+
+            query = (
+                f"INSERT INTO administrator ({', '.join(insert_columns)}) "
+                f"VALUES ({', '.join(['%s'] * len(insert_columns))})"
+            )
+            self.db.execute_update(query, tuple(insert_values))
+
+            logger.info(f"Admin account created: {username}")
+            return True, "Compte administrateur créé"
+
+        except Exception as e:
+            logger.error(f"Error creating admin account: {e}")
+            return False, f"Erreur: {str(e)}"
     
     def change_password(self, student_number: str, old_password: str, new_password: str) -> bool:
         """
@@ -210,6 +280,105 @@ class AuthenticationService:
             logger.error(f"Error changing password: {e}")
             return False
 
+    def reset_password_by_email(self, identifier: str, new_password: str) -> tuple:
+        """Réinitialise le mot de passe via email ou matricule (flux 'mot de passe oublié').
+
+        Returns:
+            (success: bool, message: str)
+        """
+        try:
+            identifier = (identifier or "").strip()
+            if not identifier or not new_password:
+                return False, "Identifiant et mot de passe requis"
+            if len(new_password) < 4:
+                return False, "Le mot de passe doit avoir au moins 4 caractères"
+
+            new_hash = self.password_hasher.hash_password(new_password)
+
+            # 1) Admin par username
+            res = self.db.execute_query(
+                "SELECT id FROM administrator WHERE username = %s", (identifier,)
+            )
+            if res:
+                self.db.execute_update(
+                    "UPDATE administrator SET password_hash = %s WHERE username = %s",
+                    (new_hash, identifier),
+                )
+                logger.info(f"Admin password reset for '{identifier}'")
+                return True, "Mot de passe réinitialisé avec succès"
+
+            # 2) Étudiant par email
+            res = self.db.execute_query(
+                "SELECT id FROM student WHERE email = %s", (identifier,)
+            )
+            if res:
+                self.db.execute_update(
+                    "UPDATE student SET password_hash = %s WHERE email = %s",
+                    (new_hash, identifier),
+                )
+                logger.info(f"Student password reset by email '{identifier}'")
+                return True, "Mot de passe réinitialisé avec succès"
+
+            # 3) Étudiant par matricule
+            res = self.db.execute_query(
+                "SELECT id FROM student WHERE student_number = %s", (identifier,)
+            )
+            if res:
+                self.db.execute_update(
+                    "UPDATE student SET password_hash = %s WHERE student_number = %s",
+                    (new_hash, identifier),
+                )
+                logger.info(f"Student password reset by number '{identifier}'")
+                return True, "Mot de passe réinitialisé avec succès"
+
+            return False, "Aucun compte trouvé pour cet identifiant"
+
+        except Exception as e:
+            logger.error(f"reset_password_by_email error: {e}")
+            return False, f"Erreur: {str(e)}"
+
+    def authenticate_by_email_no_pw(self, email: str) -> dict:
+        """Authentifie un utilisateur par email uniquement (flux OAuth — identité vérifiée par le provider).
+
+        Returns:
+            dict with 'role' key, or None if not found.
+        """
+        try:
+            email_lower = (email or "").strip().lower()
+            if not email_lower:
+                return None
+
+            # Vérifie dans administrator si une colonne email existe
+            try:
+                res = self.db.execute_query(
+                    "SELECT * FROM administrator WHERE LOWER(email) = %s AND is_active = 1",
+                    (email_lower,),
+                )
+                if res:
+                    admin = res[0]
+                    admin["role"] = "admin"
+                    logger.info(f"OAuth admin login: {email_lower}")
+                    return admin
+            except Exception:
+                pass  # colonne email absente dans administrator – non bloquant
+
+            # Vérifie dans student
+            res = self.db.execute_query(
+                "SELECT * FROM student WHERE LOWER(email) = %s", (email_lower,)
+            )
+            if res:
+                student = res[0]
+                student["role"] = "student"
+                logger.info(f"OAuth student login: {email_lower}")
+                return student
+
+            logger.warning(f"OAuth: no account for email '{email_lower}'")
+            return None
+
+        except Exception as e:
+            logger.error(f"authenticate_by_email_no_pw error: {e}")
+            return None
+
     def _generate_placeholder_password(self) -> str:
         """Génère un mot de passe temporaire non communiqué"""
         return secrets.token_urlsafe(24)
@@ -226,10 +395,13 @@ class AuthenticationService:
         Returns:
             ID de l'étudiant si succès, sinon 0
         """
+        self._set_last_error(None)
         try:
             if password:
                 valid, msg = self.validators.validate_numeric_password(password)
                 if not valid:
+                    error_msg = f"Mot de passe invalide: {msg}"
+                    self._set_last_error(error_msg)
                     logger.warning(f"Invalid password for student {student.student_number}: {msg}")
                     return 0
                 password_to_hash = password
@@ -269,10 +441,13 @@ class AuthenticationService:
                 (student.student_number,)
             )
             if not result:
+                error_msg = "Étudiant inséré mais identifiant introuvable"
+                self._set_last_error(error_msg)
                 logger.error("Student inserted but ID not found")
                 return 0
 
             student_id = result[0]["id"]
+            self._set_last_error(None)
             if face_encoding is None:
                 logger.info(f"Student {student.student_number} registered without face encoding")
             else:
@@ -280,5 +455,7 @@ class AuthenticationService:
             return student_id
 
         except Exception as e:
+            error_msg = str(e)
+            self._set_last_error(error_msg)
             logger.error(f"Error registering student with face: {e}")
             return 0

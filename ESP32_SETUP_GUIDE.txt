@@ -1,0 +1,141 @@
+================================================================================
+                    ESP32 CAM - GUIDE DE CONFIGURATION RAPIDE
+================================================================================
+
+ÉTAPE 1: INSTALLER THONNY IDE
+──────────────────────────────
+
+1. Télécharger Thonny à: https://thonny.org/
+2. Installer (accepter tous les défauts)
+3. Lancer Thonny
+
+ÉTAPE 2: CONFIGURER THONNY POUR ESP32
+───────────────────────────────────────
+
+1. Dans Thonny, aller à: Tools → Configure interpreter
+2. Sélectionner: "MicroPython (ESP32)"
+3. Port: COM10 (sélectionner le port USB)
+4. Click "OK"
+5. Attendre la détection... le port devrait afficher:
+   "MicroPython v1.xx.x on xxxxx with xxx"
+
+🎉 Thonny est maintenant connecté à l'ESP32!
+
+ÉTAPE 3: UPLOADER LES FICHIERS
+───────────────────────────────
+
+Ces 2 fichiers sont dans le dossier du projet:
+  • esp32_camera_config.py
+  • esp32_flash_diagnostic.py
+
+DANS THONNY:
+  1. Ouvrir esp32_camera_config.py (File → Open)
+  2. Dans l'éditeur (à droite), aller à: File → Save As
+  3. Sélectionner: "MicroPython device" 
+  4. Sauvegarder comme: esp32_camera_config.py
+  5. Répéter avec esp32_flash_diagnostic.py
+
+OU DRAG & DROP:
+  1. Ne sélectionner RIEN dans l'éditeur
+  2. Dans la zone de gauche (File system), tu devrais voir 2 panneaux:
+     - Haut: Fichiers de l'ordinateur
+     - Bas: Fichiers de l'ESP32
+  3. Drag les fichiers du haut vers le bas!
+
+ÉTAPE 4: LANCER LE DIAGNOSTIC
+──────────────────────────────
+
+Option A - Via Thonny (plus facile):
+  1. Double-clic sur esp32_flash_diagnostic.py (panneau bas)
+  2. Appuyer sur RESET sur l'ESP32
+  3. Attendre les logs
+
+Option B - Via ce script Python:
+  1. Ouvrir PowerShell
+  2. cd e:\SECRET FILES\MY_TFC
+  3. python esp32_setup_wizard.py
+  4. Suivre les instructions
+
+ÉTAPE 5: RÉSULTATS ATTENDUS
+────────────────────────────
+
+Si tout fonctionne, tu devrais voir dans les logs:
+
+  ✓ Chip ID: ...
+  ✓ Fréquence CPU: 240 MHz
+  ✓ Capteur trouvé: OV2640 @ 0x21
+  ✓ Format RGB565 validé (320x240)
+  ✓✓ CAMÉRA OPÉRATIONNELLE
+
+Si tu vois des erreurs (JPEG not supported, etc.):
+  → Le script a été corrigé pour utiliser RGB565 (meilleure compatibilité)
+  → Si toujours erreurs: vérifier connection du câble caméra
+
+TROUBLESHOOTING
+────────────────
+
+Problème: "Port COM10 not found"
+Solution:
+  1. Débrancher/rebrancher l'ESP32
+  2. Vérifier Gestionnaire des périphériques
+  3. Installer driver CH340 si nécessaire
+
+Problème: Thonny ne détecte pas l'ESP32
+Solution:
+  1. Tools → Configure interpreter → select "COM10"
+  2. Click OK (peut prendre 10-15 sec)
+  3. Si timeout: cliquer sur le port et "Connect"
+  4. Appuyer RESET sur l'ESP32
+
+Problème: "Frame buffer: no such file"
+Solution:
+  - MicroPython pour ESP32 n'est pas à jour
+  - Télécharger la dernière version sur:
+    https://micropython.org/download/esp32/
+
+Problème: Fichiers n'apparaissent pas dans l'ESP32
+Solution:
+  1. Drag & drop ne marche pas pour tous les systèmes
+  2. Utiliser plutôt File → Save As → MicroPython device
+  3. Ou télécharger ampy:
+     pip install adafruit-ampy
+     ampy -p COM10 put esp32_camera_config.py /
+
+COMMANDES UTILES DANS THONNY REPL
+──────────────────────────────────
+
+Une fois les fichiers uploadés, tu peux tester:
+
+>>> import esp32_camera_config
+>>> esp32_camera_config.initialize_with_diagnostics()
+
+Ou:
+
+>>> from esp32_camera_config import camera_manager
+>>> frame = camera_manager.capture_frame()
+>>> print(f"Frame: {len(frame)} bytes")
+
+Or:
+
+>>> camera_manager.get_camera_status()
+{'initialized': True, 'format': 'PIXFORMAT_RGB565', 'framesize': 'FRAMESIZE_QVGA'}
+
+================================================================================
+                            PROCHAINES ÉTAPES
+================================================================================
+
+Une fois la caméra validée:
+
+1. Intégrer esp32_camera_config.py dans esp32_hardware.py ✓ (déjà fait)
+2. Configurer reconnaissance faciale (TensorFlow Lite)
+3. Tester communication Arduino/ESP32
+4. Système complet d'accès
+
+Documents utiles:
+  • esp32_hardware.py       - Configuration hardw
+
+are du système
+  • esp32_camera_config.py  - Gestion multi-formats caméra
+  • esp32_flash_diagnostic.py - Script diagnostic complet
+
+================================================================================

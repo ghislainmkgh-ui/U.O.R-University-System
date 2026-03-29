@@ -9,6 +9,7 @@ import jwt
 import hashlib
 from datetime import datetime, timedelta
 from functools import wraps
+from config.settings import SECRET_KEY
 
 """
 Classe mock TransferService pour tests sans dépendance externe
@@ -38,7 +39,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Configuration
-app.config['SECRET_KEY'] = 'your-secret-key-here'  # À changer en production
+app.config['SECRET_KEY'] = SECRET_KEY
 app.config['API_VERSION'] = 'v1'
 
 transfer_service = TransferService()

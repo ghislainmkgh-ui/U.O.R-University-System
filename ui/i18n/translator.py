@@ -364,10 +364,13 @@ TRANSLATIONS = {
         # Navigation
         "dashboard": "Tableau de Bord",
         "students": "Étudiants",
+        "academic_data": "Données Académiques",
         "finance": "Finances",
         "access_logs": "Logs d'Accès",
         "reports": "Rapports",
         "academic_years": "Années Acad.",
+        "transfers": "Transferts",
+        "access_requests": "Demandes d'accès",
         "settings": "Paramètres",
         "theme": "Thème",
         "light_theme": "Clair",
@@ -382,6 +385,11 @@ TRANSLATIONS = {
         "welcome": "Bienvenue",
         "access_granted": "Accès Autorisé",
         "access_denied": "Accès Refusé",
+        "access_denied_message": "Seuls les super administrateurs peuvent gérer les demandes d'accès.",
+        "logout_tooltip": "Se déconnecter du système",
+        "logout_confirm_title": "Confirmation de déconnexion",
+        "logout_confirm_message": "Êtes-vous sûr de vouloir vous déconnecter?\n\nVous devrez vous reconnecter pour accéder au système.",
+        "logging_out": "Déconnexion en cours...",
         
         # Dashboard
         "total_students": "Total Étudiants",
@@ -394,6 +402,7 @@ TRANSLATIONS = {
         "overview": "Vue d'ensemble",
         "dashboard_title": "Dashboard",
         "dashboard_subtitle": "Vue d'ensemble",
+        "admin_dashboard_subtitle": "TABLEAU DE BORD ADMIN",
         
         # Étudiants
         "student_number": "Matricule d'Étudiant",
@@ -454,6 +463,8 @@ TRANSLATIONS = {
 
         "students_title": "Gestion des Étudiants",
         "students_subtitle": "Gestion et suivi des étudiants",
+        "sidebar_mode_compact": "Mode: Compact",
+        "sidebar_mode_full": "Mode: Complet",
         "finance_title": "Gestion Financière",
         "finance_subtitle": "Suivi des paiements et seuils",
         "access_logs_title": "Historique d'Accès",
@@ -558,6 +569,26 @@ TRANSLATIONS = {
         "fp_not_found": "Aucun compte trouvé pour cet identifiant",
         "fp_success": "Mot de passe réinitialisé avec succès ✓",
         "fp_min_length": "Le mot de passe doit avoir au moins 4 caractères",
+
+        # Gestion des accès (super admin)
+        "access_management_title": "Gestion des Accès",
+        "access_management_subtitle": "Demandes en attente & utilisateurs approuvés",
+        "pending_access_requests_title": "Demandes en attente de validation",
+        "no_pending_requests": "Aucune demande en attente.",
+        "reject_request_confirm": "Rejeter cette demande d'accès ?",
+        "approved_users_title": "Utilisateurs approuvés",
+        "no_users_found": "Aucun utilisateur trouvé.",
+        "user": "Utilisateur",
+        "role": "Rôle",
+        "action": "Action",
+        "super_admin": "Super Admin",
+        "admin": "Admin",
+        "confirm_delete_user": "Confirmer la suppression",
+        "delete_user_irreversible": "Supprimer définitivement l'utilisateur « {username} » ?\n\nCette action est irréversible.",
+        "access_tab_pending": "Demandes en attente",
+        "access_tab_users": "Utilisateurs approuvés",
+        "approve": "Valider",
+        "reject": "Rejeter",
     },
     "EN": {
         # Language and platform
@@ -567,10 +598,13 @@ TRANSLATIONS = {
         # Navigation
         "dashboard": "Dashboard",
         "students": "Students",
+        "academic_data": "Academic Data",
         "finance": "Finance",
         "access_logs": "Access Logs",
         "reports": "Reports",
         "academic_years": "Academic Years",
+        "transfers": "Transfers",
+        "access_requests": "Access Requests",
         "settings": "Settings",
         "theme": "Theme",
         "light_theme": "Light",
@@ -585,6 +619,11 @@ TRANSLATIONS = {
         "welcome": "Welcome",
         "access_granted": "Access Granted",
         "access_denied": "Access Denied",
+        "access_denied_message": "Only super administrators can manage access requests.",
+        "logout_tooltip": "Log out of the system",
+        "logout_confirm_title": "Logout confirmation",
+        "logout_confirm_message": "Are you sure you want to log out?\n\nYou will need to sign in again to access the system.",
+        "logging_out": "Logging out...",
         
         # Dashboard
         "total_students": "Total Students",
@@ -597,6 +636,7 @@ TRANSLATIONS = {
         "overview": "Overview",
         "dashboard_title": "Dashboard",
         "dashboard_subtitle": "Overview",
+        "admin_dashboard_subtitle": "ADMIN DASHBOARD",
         
         # Students
         "student_number": "Student Number",
@@ -657,6 +697,8 @@ TRANSLATIONS = {
 
         "students_title": "Student Management",
         "students_subtitle": "Manage and track students",
+        "sidebar_mode_compact": "Mode: Compact",
+        "sidebar_mode_full": "Mode: Full",
         "finance_title": "Finance Management",
         "finance_subtitle": "Payments and thresholds monitoring",
         "access_logs_title": "Access History",
@@ -761,6 +803,26 @@ TRANSLATIONS = {
         "fp_not_found": "No account found for this identifier",
         "fp_success": "Password reset successfully ✓",
         "fp_min_length": "Password must be at least 4 characters",
+
+        # Access management (super admin)
+        "access_management_title": "Access Management",
+        "access_management_subtitle": "Pending requests & approved users",
+        "pending_access_requests_title": "Pending access requests",
+        "no_pending_requests": "No pending requests.",
+        "reject_request_confirm": "Reject this access request?",
+        "approved_users_title": "Approved users",
+        "no_users_found": "No users found.",
+        "user": "User",
+        "role": "Role",
+        "action": "Action",
+        "super_admin": "Super Admin",
+        "admin": "Admin",
+        "confirm_delete_user": "Confirm deletion",
+        "delete_user_irreversible": "Permanently delete user “{username}”?\n\nThis action cannot be undone.",
+        "access_tab_pending": "Pending requests",
+        "access_tab_users": "Approved users",
+        "approve": "Approve",
+        "reject": "Reject",
     }
 }
 

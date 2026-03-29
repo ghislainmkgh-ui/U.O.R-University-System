@@ -13,6 +13,7 @@ from ui.theme.theme_manager import ThemeManager
 from app.services.auth.authentication_service import AuthenticationService
 from ui.components.modern_loading import ProgressTracker
 import webbrowser
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ class LoginScreen(ctk.CTkFrame):
         self.auth_service = None
         self.dashboard_open = False
         self.progress_tracker = ProgressTracker()
+        self.compact_login_form = True
 
         self.card_outer = None
         self.card_inner = None
@@ -75,6 +77,8 @@ class LoginScreen(ctk.CTkFrame):
         self.hero_badge = None
         self.hero_title = None
         self.hero_subtitle = None
+        self.password_toggle_btn = None
+        self._password_visible = False
         
         # Widgets à ajuster pour responsive
         self.responsive_widgets = {}
@@ -217,8 +221,8 @@ class LoginScreen(ctk.CTkFrame):
             logger.error(f"Could not load UOR logo: {e}", exc_info=True)
 
         # ===== TOP BAR =====
-        topbar = ctk.CTkFrame(main, fg_color="#5DD3E0", height=50)
-        topbar.pack(fill="x", padx=20, pady=(10, 0))
+        topbar = ctk.CTkFrame(main, fg_color="#5DD3E0", height=42)
+        topbar.pack(fill="x", padx=14, pady=(8, 0))
         topbar.pack_propagate(False)
         self.topbar = topbar
 
@@ -244,7 +248,7 @@ class LoginScreen(ctk.CTkFrame):
 
         # ===== CENTER CONTAINER =====
         center = ctk.CTkFrame(main, fg_color="#5DD3E0")
-        center.pack(fill="both", expand=True, padx=20, pady=20)
+        center.pack(fill="both", expand=True, padx=12, pady=10)
         self.center_frame = center
 
         hero_frame = ctk.CTkFrame(center, fg_color="transparent")
@@ -283,6 +287,10 @@ class LoginScreen(ctk.CTkFrame):
         hero_subtitle.pack(pady=(8, 0))
         self.hero_subtitle = hero_subtitle
 
+        # Mode compact: masquer l'entête éditorial pour garder uniquement le formulaire utile, centré.
+        if self.compact_login_form and self.hero_frame is not None:
+            self.hero_frame.place_forget()
+
         # ===== LOGIN CARD (avec effet d'ombre via layers) =====
         # Shadow layer (légère)
         shadow_frame = ctk.CTkFrame(
@@ -290,7 +298,7 @@ class LoginScreen(ctk.CTkFrame):
             fg_color="#3EB8C8", 
             corner_radius=15
         )
-        shadow_frame.place(relx=0.5, rely=0.58, anchor="center")
+        shadow_frame.place(relx=0.5, rely=0.50, anchor="center")
         shadow_frame.pack_propagate(False)
         
         # Main card
@@ -299,7 +307,7 @@ class LoginScreen(ctk.CTkFrame):
             fg_color="#3E4F5A",  # Couleur exacte de l'image
             corner_radius=12
         )
-        card.pack(padx=8, pady=8, fill="both", expand=True)
+        card.pack(padx=8, pady=8, fill="x", expand=False)
         self.card_outer = shadow_frame
         self.card_inner = card
 
@@ -309,7 +317,7 @@ class LoginScreen(ctk.CTkFrame):
             fg_color="#3E4F5A",
             corner_radius=0,
         )
-        content.pack(padx=24, pady=24, fill="both", expand=True)
+        content.pack(padx=16, pady=14, fill="x", expand=False)
         self.content_frame = content
 
         # Icon circle avec camera
@@ -384,19 +392,37 @@ class LoginScreen(ctk.CTkFrame):
         self.responsive_widgets['password_label'] = password_label
         self.translatable_widgets['password_label'] = password_label
 
+        password_row = ctk.CTkFrame(content, fg_color="#3E4F5A")
+        password_row.pack(fill="x", pady=(0, 14))
+
         self.entry_password = ctk.CTkEntry(
-            content, 
-            placeholder_text="", 
-            height=36, 
-            show="•", 
-            corner_radius=5, 
+            password_row,
+            placeholder_text="",
+            height=36,
+            show="•",
+            corner_radius=5,
             border_width=1,
-            fg_color="#2A3940", 
-            border_color="#5A6B75", 
-            text_color="#FFFFFF", 
+            fg_color="#2A3940",
+            border_color="#5A6B75",
+            text_color="#FFFFFF",
             font=ctk.CTkFont(size=11)
         )
-        self.entry_password.pack(fill="x", pady=(0, 14))
+        self.entry_password.pack(side="left", fill="x", expand=True)
+
+        self.password_toggle_btn = ctk.CTkButton(
+            password_row,
+            text="👁",
+            width=44,
+            height=36,
+            fg_color="#2A3940",
+            hover_color="#374F5A",
+            text_color="#DDE6EA",
+            corner_radius=5,
+            border_width=1,
+            border_color="#5A6B75",
+            command=self._toggle_password_visibility,
+        )
+        self.password_toggle_btn.pack(side="left", padx=(8, 0))
         self.entry_password.insert(0, "admin123")
 
         # Options row: Remember me + Forgot Password
@@ -436,7 +462,10 @@ class LoginScreen(ctk.CTkFrame):
             content, 
             text="", 
             font=ctk.CTkFont(size=10, weight="bold"), 
-            text_color="#FFB4B4"
+            text_color="#FFB4B4",
+            anchor="w",
+            justify="left",
+            wraplength=300,
         )
         self.status_label.pack(fill="x", pady=(0, 10))
 
@@ -544,7 +573,7 @@ class LoginScreen(ctk.CTkFrame):
         try:
             # Espace vertical réel disponible pour la card (avec marges topbar + conteneurs)
             # Ajusté pour éviter de sous-dimensionner la card sur écrans moyens.
-            available_h = max(window_height - 180, 320)
+            available_h = max(window_height - (95 if self.compact_login_form else 180), 280)
 
             # Largeur responsive
             aspect_ratio = (window_width / window_height) if window_height > 0 else 1.0
@@ -627,6 +656,16 @@ class LoginScreen(ctk.CTkFrame):
                 title_bottom_pady = 24
                 icon_bottom_pady = 16
                 shadow_pady = 15
+
+            if self.compact_login_form:
+                # Réduction agressive des espaces pour garder un formulaire petit et centré
+                card_width = min(card_width, 430)
+                padding = max(8, padding - 6)
+                title_bottom_pady = max(10, title_bottom_pady - 8)
+                icon_bottom_pady = max(8, icon_bottom_pady - 5)
+                options_pady = (0, max(4, options_pady[1] - 3))
+                or_pady = (max(4, or_pady[0] - 5), 0)
+                social_pady = (max(4, social_pady[0] - 4), max(1, social_pady[1] - 1))
             
             # Ajuster la hauteur à la hauteur réelle du contenu pour éviter la zone vide en bas
             try:
@@ -636,9 +675,19 @@ class LoginScreen(ctk.CTkFrame):
                     # marge verticale minimale pour limiter l'espace vide sous les boutons
                     desired = content_needed + 14
                     # borne pour conserver un rendu stable
-                    card_height = max(min(desired, available_h), 320)
+                    card_height = max(min(desired, available_h), 280 if self.compact_login_form else 320)
             except Exception:
                 pass
+
+            # En mode compact, verrouiller la hauteur au strict nécessaire pour supprimer
+            # toute zone vide sous les boutons sociaux.
+            if self.compact_login_form:
+                try:
+                    self.update_idletasks()
+                    intrinsic_h = self.content_frame.winfo_reqheight() if self.content_frame is not None else card_height
+                    card_height = max(220, min(intrinsic_h + 18, available_h))
+                except Exception:
+                    pass
 
             layout_profile = (
                 "xs" if available_h < 470 else "sm" if available_h < 560 else "md" if available_h < 700 else "lg",
@@ -656,11 +705,19 @@ class LoginScreen(ctk.CTkFrame):
                 if abs(current_w - card_width) > 1 or abs(current_h - card_height) > 1:
                     self.card_outer.configure(width=card_width, height=card_height)
                 self.card_outer.pack_propagate(False)
-                self.card_outer.place_configure(relx=0.5, rely=0.60 if compact_mode else 0.58, anchor="center")
+                if self.card_inner is not None:
+                    self.card_inner.pack_configure(fill="x", expand=False)
+                if self.compact_login_form:
+                    self.card_outer.place_configure(relx=0.5, rely=0.5, anchor="center")
+                else:
+                    self.card_outer.place_configure(relx=0.5, rely=0.60 if compact_mode else 0.58, anchor="center")
             
             # Ajuster le padding du contenu
-            if self.content_frame is not None and profile_changed:
-                self.content_frame.pack_configure(padx=padding, pady=padding)
+            if self.content_frame is not None:
+                if self.compact_login_form:
+                    self.content_frame.pack_configure(padx=padding, pady=padding, fill="x", expand=False)
+                elif profile_changed:
+                    self.content_frame.pack_configure(padx=padding, pady=padding)
             if hasattr(self, 'options_row') and profile_changed:
                 self.options_row.pack_configure(pady=options_pady)
             if hasattr(self, 'or_frame') and profile_changed:
@@ -677,13 +734,19 @@ class LoginScreen(ctk.CTkFrame):
                 self.topbar.configure(height=topbar_height)
                 self.topbar.pack_configure(padx=topbar_padx, pady=(8 if compact_mode else 10, 0))
             if self.center_frame is not None:
-                self.center_frame.pack_configure(padx=12 if compact_mode else 20, pady=12 if compact_mode else 20)
+                if self.compact_login_form:
+                    self.center_frame.pack_configure(padx=10, pady=8)
+                else:
+                    self.center_frame.pack_configure(padx=12 if compact_mode else 20, pady=12 if compact_mode else 20)
             if self.lang_switch is not None:
                 self.lang_switch.configure(font=ctk.CTkFont(size=10 if compact_mode else 11, weight="bold"))
             if self.topbar_globe_label is not None:
                 self.topbar_globe_label.configure(font=ctk.CTkFont(size=12 if compact_mode else 14))
             if self.hero_frame is not None:
-                self.hero_frame.place_configure(relx=0.5, rely=0.07 if compact_mode else 0.11, anchor="n")
+                if self.compact_login_form:
+                    self.hero_frame.place_forget()
+                else:
+                    self.hero_frame.place_configure(relx=0.5, rely=0.07 if compact_mode else 0.11, anchor="n")
             if self.hero_badge is not None:
                 self.hero_badge.configure(font=ctk.CTkFont(size=9 if compact_mode else 11, weight="bold"), padx=10 if compact_mode else 14, pady=4 if compact_mode else 6)
             if self.hero_title is not None:
@@ -710,6 +773,13 @@ class LoginScreen(ctk.CTkFrame):
                     font=ctk.CTkFont(size=title_font_size, weight="bold", family="Arial")
                 )
                 self.responsive_widgets['title_label'].pack_configure(pady=(0, title_bottom_pady))
+
+            if self.status_label is not None:
+                try:
+                    content_w = self.content_frame.winfo_width() if self.content_frame is not None else 320
+                    self.status_label.configure(wraplength=max(220, int(content_w - 18)), justify="left", anchor="w")
+                except Exception:
+                    pass
             
             for widget_name in ['email_label', 'password_label']:
                 if widget_name in self.responsive_widgets:
@@ -722,6 +792,8 @@ class LoginScreen(ctk.CTkFrame):
                 self.entry_username.configure(height=input_height)
             if hasattr(self, 'entry_password'):
                 self.entry_password.configure(height=input_height)
+            if self.password_toggle_btn is not None:
+                self.password_toggle_btn.configure(height=input_height, width=40 if compact_mode else 44)
             
             # Ajuster la hauteur des boutons
             if hasattr(self, 'login_btn'):
@@ -732,6 +804,31 @@ class LoginScreen(ctk.CTkFrame):
                 self.google_btn.configure(height=social_button_height)
             if hasattr(self, 'github_btn'):
                 self.github_btn.configure(height=social_button_height)
+
+            # Override final en mode compact: hauteur strictement collée au contenu utile.
+            if self.compact_login_form and self.content_frame is not None and self.card_outer is not None:
+                try:
+                    self.update_idletasks()
+                    # Calculer la vraie fin du formulaire (dernier widget visible)
+                    bottom_y = 0
+                    for child in self.content_frame.winfo_children():
+                        if not child.winfo_ismapped():
+                            continue
+                        bottom_y = max(bottom_y, child.winfo_y() + child.winfo_height())
+
+                    # Hauteur intérieure de la carte (contenu + marge basse minimale)
+                    inner_h = max(180, bottom_y + 8)
+                    # +16 pour le padding (pady=8 haut/bas de self.card_inner dans self.card_outer)
+                    compact_h = max(200, min(inner_h + 16, available_h))
+
+                    if self.card_inner is not None:
+                        self.card_inner.configure(height=inner_h)
+                        self.card_inner.pack_propagate(False)
+
+                    self.card_outer.configure(height=compact_h)
+                    self.card_outer.place_configure(relx=0.5, rely=0.5, anchor="center")
+                except Exception:
+                    pass
                 
         except Exception as e:
             logger.error(f"Error updating card size: {e}")
@@ -831,6 +928,137 @@ class LoginScreen(ctk.CTkFrame):
                 self._last_applied_window_size = (window_width, window_height)
         except Exception:
             pass
+
+    def _toggle_password_visibility(self):
+        """Affiche ou masque le mot de passe."""
+        try:
+            self._password_visible = not self._password_visible
+            if self._password_visible:
+                self.entry_password.configure(show="")
+                if self.password_toggle_btn is not None:
+                    self.password_toggle_btn.configure(text="🙈")
+            else:
+                self.entry_password.configure(show="•")
+                if self.password_toggle_btn is not None:
+                    self.password_toggle_btn.configure(text="👁")
+        except Exception as exc:
+            logger.debug(f"Password toggle failed: {exc}")
+
+    def _set_status_message(self, message: str, *, is_error: bool = True):
+        """Affiche un message utilisateur clair, lisible et adapté à la largeur courante."""
+        if self.status_label is None:
+            return
+        try:
+            content_w = self.content_frame.winfo_width() if self.content_frame is not None else 320
+            wrap = max(220, int(content_w - 18))
+        except Exception:
+            wrap = 300
+
+        try:
+            self.status_label.configure(
+                text=message or "",
+                text_color="#FFB4B4" if is_error else "#6EE7B7",
+                wraplength=wrap,
+                justify="left",
+                anchor="w",
+            )
+        except Exception as exc:
+            logger.debug(f"Unable to update status message: {exc}")
+
+    def _friendly_login_error(self, raw_error: str) -> str:
+        """Transforme les erreurs techniques en messages clairs orientés utilisateur."""
+        msg = (raw_error or "").strip()
+        low = msg.lower()
+
+        # Cas courants liés aux informations saisies
+        if any(k in low for k in ["invalid", "incorrect", "wrong password", "mot de passe", "identifiants"]):
+            return (
+                "Email/identifiant ou mot de passe incorrect. Vérifiez vos informations puis réessayez."
+                if self.selected_language == "FR"
+                else "Incorrect email/username or password. Please check your information and try again."
+            )
+
+        if any(k in low for k in ["not found", "introuvable", "no account", "aucun compte"]):
+            return (
+                "Aucun compte trouvé avec ces informations. Vérifiez l'email saisi ou créez un compte."
+                if self.selected_language == "FR"
+                else "No account was found with these details. Check the entered email or create an account."
+            )
+
+        if any(k in low for k in ["inactive", "désactiv", "disabled"]):
+            return (
+                "Votre compte est inactif. Contactez l'administrateur pour l'activer."
+                if self.selected_language == "FR"
+                else "Your account is inactive. Please contact an administrator to activate it."
+            )
+
+        if any(k in low for k in ["approved", "validation", "pending", "en attente"]):
+            return (
+                "Votre compte est en attente de validation par un super administrateur."
+                if self.selected_language == "FR"
+                else "Your account is pending approval by a super administrator."
+            )
+
+        # Fallback lisible
+        return (
+            f"Connexion impossible pour le moment. Détail : {msg}" if self.selected_language == "FR"
+            else f"Unable to sign in right now. Details: {msg}"
+        )
+
+    def _friendly_reset_password_error(self, raw_error: str) -> str:
+        """Normalise les erreurs de réinitialisation mot de passe pour l'utilisateur."""
+        msg = (raw_error or "").strip()
+        low = msg.lower()
+
+        if any(k in low for k in ["aucun compte", "not found", "introuvable"]):
+            return (
+                "Aucun compte trouvé. Vérifiez votre email/matricule puis réessayez."
+                if self.selected_language == "FR"
+                else "No account found. Check your email/student ID and try again."
+            )
+
+        if any(k in low for k in ["required", "requis", "identifiant"]):
+            return (
+                "Renseignez l'identifiant et un nouveau mot de passe valide."
+                if self.selected_language == "FR"
+                else "Please provide your identifier and a valid new password."
+            )
+
+        return (
+            f"Impossible de réinitialiser le mot de passe. Détail : {msg}" if self.selected_language == "FR"
+            else f"Password reset failed. Details: {msg}"
+        )
+
+    def _friendly_create_admin_error(self, raw_error: str) -> str:
+        """Normalise les erreurs de création de compte admin pour l'utilisateur."""
+        msg = (raw_error or "").strip()
+        low = msg.lower()
+
+        if any(k in low for k in ["exists", "already", "déjà", "duplicate", "duplicat"]):
+            return (
+                "Ce compte existe déjà. Utilisez un autre email/identifiant ou connectez-vous."
+                if self.selected_language == "FR"
+                else "This account already exists. Use another email/username or sign in."
+            )
+
+        if any(k in low for k in ["invalid", "email", "format"]):
+            return (
+                "Adresse email invalide. Vérifiez le format (ex: nom@domaine.com)."
+                if self.selected_language == "FR"
+                else "Invalid email address. Check the format (e.g., name@domain.com)."
+            )
+
+        if any(k in low for k in ["password", "mot de passe", "6 caractères"]):
+            return (
+                "Mot de passe invalide. Utilisez au moins 6 caractères."
+                if self.selected_language == "FR"
+                else "Invalid password. Use at least 6 characters."
+            )
+
+        return (
+            f"Création du compte impossible. Détail : {msg}" if self.selected_language == "FR"
+            else f"Unable to create account. Details: {msg}"
+        )
 
     def _fit_dialog_to_viewport(self, dialog, desired_width: int, desired_height: int,
                                 min_width: int = 280, min_height: int = 140,
@@ -991,8 +1219,31 @@ class LoginScreen(ctk.CTkFrame):
         username = self.entry_username.get().strip()
         password = self.entry_password.get().strip()
 
-        if not username or not password:
-            self.status_label.configure(text=self.translator.translate_literal("Veuillez entrer vos identifiants"))
+        if not username and not password:
+            self._set_status_message(
+                "Veuillez renseigner votre email/identifiant et votre mot de passe."
+                if self.selected_language == "FR"
+                else "Please enter both your email/username and password.",
+                is_error=True,
+            )
+            return
+
+        if not username:
+            self._set_status_message(
+                "Veuillez renseigner votre email ou identifiant."
+                if self.selected_language == "FR"
+                else "Please enter your email or username.",
+                is_error=True,
+            )
+            return
+
+        if not password:
+            self._set_status_message(
+                "Veuillez renseigner votre mot de passe."
+                if self.selected_language == "FR"
+                else "Please enter your password.",
+                is_error=True,
+            )
             return
 
         # Désactiver le bouton login
@@ -1013,7 +1264,7 @@ class LoginScreen(ctk.CTkFrame):
                     logger.info("AuthenticationService lazy-init in %.1f ms", (perf_counter() - svc_t0) * 1000)
                 user, error = self.auth_service.authenticate(username, password)
             except Exception as ex:
-                error = f"{self.translator.translate_literal('Erreur')}: {str(ex)}"
+                error = self._friendly_login_error(str(ex))
                 logger.error(f"Login error: {ex}", exc_info=True)
             finally:
                 elapsed_ms = (perf_counter() - auth_t0) * 1000
@@ -1029,14 +1280,19 @@ class LoginScreen(ctk.CTkFrame):
         logger.info("Authentication completed in %.1f ms", elapsed_ms)
 
         if error:
-            self.status_label.configure(text=error)
+            self._set_status_message(self._friendly_login_error(error), is_error=True)
             self.dashboard_open = False
             if login_btn:
                 login_btn.configure(state="normal")
             return
 
         if not user:
-            self.status_label.configure(text=self.translator.translate_literal("Connexion échouée"))
+            self._set_status_message(
+                "Connexion échouée. Vérifiez vos informations puis réessayez."
+                if self.selected_language == "FR"
+                else "Login failed. Please check your information and try again.",
+                is_error=True,
+            )
             self.dashboard_open = False
             if login_btn:
                 login_btn.configure(state="normal")
@@ -1066,14 +1322,14 @@ class LoginScreen(ctk.CTkFrame):
         progress.set_progress(20, self.translator.translate_literal("Authentification validée..."))
 
         # Exécuter la construction UI sur le thread principal (Tkinter thread-safe)
-        self.after(30, lambda: self._build_dashboard_ui(parent_frame, progress, login_btn))
+        self.after(30, lambda: self._build_dashboard_ui(parent_frame, progress, login_btn, user))
 
-    def _build_dashboard_ui(self, parent_frame, progress, login_btn):
+    def _build_dashboard_ui(self, parent_frame, progress, login_btn, user=None):
         """Demande à l'application d'ouvrir la page dashboard."""
         build_t0 = perf_counter()
         try:
             if self.parent_app:
-                self.parent_app.open_dashboard_page(language=self.selected_language, progress=progress)
+                self.parent_app.open_dashboard_page(language=self.selected_language, progress=progress, user=user)
             else:
                 progress.set_progress(45, self.translator.translate_literal("Initialisation de l'interface..."))
 
@@ -1103,7 +1359,7 @@ class LoginScreen(ctk.CTkFrame):
                         login_btn.configure(state="normal")
                 except Exception:
                     pass
-            self.status_label.configure(text=f"{self.translator.translate_literal('Erreur')}: {str(e)}")
+            self._set_status_message(f"{self.translator.translate_literal('Erreur')}: {str(e)}", is_error=True)
         finally:
             self.dashboard_open = False
 
@@ -1278,6 +1534,7 @@ class LoginScreen(ctk.CTkFrame):
         status_lbl = ctk.CTkLabel(
             frame, text="",
             font=ctk.CTkFont(size=10), text_color="#FFB4B4", wraplength=300,
+            justify="left", anchor="w",
         )
         status_lbl.pack(fill="x", pady=(0, 10))
 
@@ -1319,19 +1576,31 @@ class LoginScreen(ctk.CTkFrame):
 
         if not identifier or not new_pw or not confirm_pw:
             status_lbl.configure(
-                text=t.get("fp_missing_fields", "Veuillez remplir tous les champs"),
+                text=(
+                    "Veuillez renseigner l'email/matricule, le nouveau mot de passe et la confirmation."
+                    if self.selected_language == "FR"
+                    else "Please enter your email/student ID, the new password, and the confirmation."
+                ),
                 text_color="#FFB4B4",
             )
             return
         if len(new_pw) < 4:
             status_lbl.configure(
-                text=t.get("fp_min_length", "Le mot de passe doit avoir au moins 4 caractères"),
+                text=(
+                    "Nouveau mot de passe trop court. Utilisez au moins 4 caractères."
+                    if self.selected_language == "FR"
+                    else "New password is too short. Use at least 4 characters."
+                ),
                 text_color="#FFB4B4",
             )
             return
         if new_pw != confirm_pw:
             status_lbl.configure(
-                text=t.get("fp_no_match", "Les mots de passe ne correspondent pas"),
+                text=(
+                    "Les mots de passe ne correspondent pas. Retapez exactement le même mot de passe."
+                    if self.selected_language == "FR"
+                    else "Passwords do not match. Please type exactly the same password in both fields."
+                ),
                 text_color="#FFB4B4",
             )
             return
@@ -1362,7 +1631,7 @@ class LoginScreen(ctk.CTkFrame):
                 dialog.after(1400, lambda: dialog.destroy() if dialog.winfo_exists() else None)
             else:
                 status_lbl.configure(
-                    text=msg or t.get("fp_not_found", "Aucun compte trouvé"),
+                    text=self._friendly_reset_password_error(msg or t.get("fp_not_found", "Aucun compte trouvé")),
                     text_color="#FFB4B4",
                 )
 
@@ -1443,6 +1712,7 @@ class LoginScreen(ctk.CTkFrame):
         status_lbl = ctk.CTkLabel(
             frame, text="",
             font=ctk.CTkFont(size=10), text_color="#FFB4B4", wraplength=320,
+            justify="left", anchor="w",
         )
         status_lbl.pack(fill="x", pady=(0, 10))
 
@@ -1484,13 +1754,34 @@ class LoginScreen(ctk.CTkFrame):
         confirm_password = (confirm_password or "").strip()
 
         if not username or not email or not password or not confirm_password:
-            status_lbl.configure(text=t.get("fp_missing_fields", "Veuillez remplir tous les champs"), text_color="#FFB4B4")
+            status_lbl.configure(
+                text=(
+                    "Veuillez renseigner tous les champs : identifiant, email, mot de passe et confirmation."
+                    if self.selected_language == "FR"
+                    else "Please complete all fields: username, email, password, and confirmation."
+                ),
+                text_color="#FFB4B4"
+            )
             return
         if password != confirm_password:
-            status_lbl.configure(text=t.get("fp_no_match", "Les mots de passe ne correspondent pas"), text_color="#FFB4B4")
+            status_lbl.configure(
+                text=(
+                    "Les mots de passe ne correspondent pas. Vérifiez la confirmation."
+                    if self.selected_language == "FR"
+                    else "Passwords do not match. Please check the confirmation field."
+                ),
+                text_color="#FFB4B4"
+            )
             return
         if len(password) < 6:
-            status_lbl.configure(text=t.get("create_admin_min_length", "Le mot de passe doit avoir au moins 6 caractères"), text_color="#FFB4B4")
+            status_lbl.configure(
+                text=(
+                    "Mot de passe trop court. Utilisez au moins 6 caractères."
+                    if self.selected_language == "FR"
+                    else "Password is too short. Use at least 6 characters."
+                ),
+                text_color="#FFB4B4"
+            )
             return
 
         status_lbl.configure(text=t.get("loading", "Traitement en cours…"), text_color="#8A9CA5")
@@ -1510,7 +1801,7 @@ class LoginScreen(ctk.CTkFrame):
                 return
             if ok:
                 status_lbl.configure(
-                    text=t.get("create_admin_success", "Compte administrateur créé avec succès ✓"),
+                    text=t.get("create_admin_success", "Demande envoyée au super admin pour validation ✓"),
                     text_color="#6EE7B7",
                 )
                 self.entry_username.delete(0, "end")
@@ -1518,7 +1809,7 @@ class LoginScreen(ctk.CTkFrame):
                 self.entry_password.delete(0, "end")
                 dialog.after(1200, lambda: dialog.destroy() if dialog.winfo_exists() else None)
             else:
-                status_lbl.configure(text=msg or t.get("error", "Erreur"), text_color="#FFB4B4")
+                status_lbl.configure(text=self._friendly_create_admin_error(msg or t.get("error", "Erreur")), text_color="#FFB4B4")
 
         threading.Thread(target=worker, daemon=True, name="uor-create-admin").start()
 
@@ -1528,6 +1819,22 @@ class LoginScreen(ctk.CTkFrame):
 
     def _on_google_login(self):
         """Lance l'authentification OAuth Google via le navigateur."""
+        entered_login = (self.entry_username.get() or "").strip()
+        expected_login_email = entered_login.lower() if self._looks_like_email(entered_login) else ""
+
+        if not expected_login_email:
+            if self.selected_language == "FR":
+                self._set_status_message(
+                    "Connexion Google : veuillez saisir une adresse email valide dans le champ Email / Identifiant.",
+                    is_error=True,
+                )
+            else:
+                self._set_status_message(
+                    "Google login: please enter a valid email address in the Email / Username field.",
+                    is_error=True,
+                )
+            return
+
         import os
         client_id     = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
         client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
@@ -1542,10 +1849,27 @@ class LoginScreen(ctk.CTkFrame):
             client_id=client_id,
             client_secret=client_secret,
             scope="openid email profile",
+            expected_login_email=expected_login_email,
         )
 
     def _on_github_login(self):
         """Lance l'authentification OAuth GitHub via le navigateur."""
+        entered_login = (self.entry_username.get() or "").strip()
+        expected_login_email = entered_login.lower() if self._looks_like_email(entered_login) else ""
+
+        if not expected_login_email:
+            if self.selected_language == "FR":
+                self._set_status_message(
+                    "Connexion GitHub : veuillez saisir une adresse email valide dans le champ Email / Identifiant.",
+                    is_error=True,
+                )
+            else:
+                self._set_status_message(
+                    "GitHub login: please enter a valid email address in the Email / Username field.",
+                    is_error=True,
+                )
+            return
+
         import os
         client_id     = os.getenv("GITHUB_OAUTH_CLIENT_ID", "")
         client_secret = os.getenv("GITHUB_OAUTH_CLIENT_SECRET", "")
@@ -1560,7 +1884,15 @@ class LoginScreen(ctk.CTkFrame):
             client_id=client_id,
             client_secret=client_secret,
             scope="user:email",
+            expected_login_email=expected_login_email,
         )
+
+    @staticmethod
+    def _looks_like_email(value: str) -> bool:
+        """Validation email simple pour le flux OAuth GitHub."""
+        if not value:
+            return False
+        return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value.strip()))
 
     def _show_oauth_not_configured(self, provider: str, env_keys: str):
         """Informe l'utilisateur que l'OAuth n'est pas encore configuré."""
@@ -1612,7 +1944,7 @@ class LoginScreen(ctk.CTkFrame):
 
     def _launch_oauth_flow(self, name: str, auth_url: str, token_url: str,
                             user_info_url: str, client_id: str, client_secret: str,
-                            scope: str):
+                            scope: str, expected_login_email: str = None):
         """Lance le flux OAuth PKCE-like via navigateur + serveur HTTP local temporaire."""
         import socket
         import http.server
@@ -1763,7 +2095,7 @@ class LoginScreen(ctk.CTkFrame):
                             break
 
                 if email:
-                    self.after(0, lambda e=email: _login_with_email(e))
+                    self.after(0, lambda e=email: _login_with_email(e, expected_login_email))
                 else:
                     self.after(0, lambda: _err("Email introuvable"))
 
@@ -1772,29 +2104,46 @@ class LoginScreen(ctk.CTkFrame):
 
         def _err(msg: str):
             if wait_dlg.winfo_exists():
-                status_var.set(f"\u274c {self.translator.translate_literal('Erreur')}: {msg}")
+                if self.selected_language == "FR":
+                    status_var.set(f"❌ Erreur de connexion {name}: {msg}")
+                else:
+                    status_var.set(f"❌ {name} login error: {msg}")
 
-        def _login_with_email(email: str):
+        def _login_with_email(email: str, expected_email: str = None):
             try:
+                provider_email = (email or "").strip().lower()
+                expected = (expected_email or "").strip().lower()
+
+                # Règle de sécurité: l'email OAuth doit correspondre à l'email saisi
+                # sur l'écran de login (Google et GitHub).
+                if expected and provider_email != expected:
+                    if wait_dlg.winfo_exists():
+                        status_var.set(
+                            f"❌ L'email {name} ne correspond pas à l'email saisi. Veuillez utiliser le même email dans le champ de connexion."
+                            if self.selected_language == "FR"
+                            else f"❌ {name} email does not match the entered login email. Please use the same email in the login field."
+                        )
+                    return
+
                 if self.auth_service is None:
                     self.auth_service = AuthenticationService()
-                user = self.auth_service.authenticate_by_email_no_pw(email)
+                user = self.auth_service.authenticate_by_email_no_pw(provider_email)
                 if user:
                     try:
                         wait_dlg.destroy()
                     except Exception:
                         pass
-                    logger.info(f"OAuth login success via {name}: {email}")
+                    logger.info(f"OAuth login success via {name}: {provider_email}")
                     parent_frame = self.winfo_toplevel()
                     progress = self.progress_tracker.create_overlay(parent_frame)
                     progress.set_progress(20, self.translator.translate_literal("OAuth validé…"))
-                    self.after(30, lambda: self._build_dashboard_ui(parent_frame, progress, self.login_btn))
+                    self.after(30, lambda: self._build_dashboard_ui(parent_frame, progress, self.login_btn, user))
                 else:
                     if wait_dlg.winfo_exists():
                         status_var.set(
-                            f"\u274c Aucun compte associé à : {email}"
+                            f"❌ Aucun compte local n'est associé à : {provider_email}. Vérifiez l'email saisi ou créez d'abord un compte."
                             if self.selected_language == "FR"
-                            else f"\u274c No account linked to: {email}"
+                            else f"❌ No local account is linked to: {provider_email}. Check the entered email or create an account first."
                         )
             except Exception as ex:
                 if wait_dlg.winfo_exists():

@@ -158,6 +158,10 @@ class ModernDialog:
         dialog.geometry(f"{width}x{height}+{center_x}+{center_y}")
         dialog.grab_set()
         dialog.resizable(False, False)
+        try:
+            parent_dashboard._animate_window_open(dialog)
+        except Exception:
+            pass
         
         return dialog
     
@@ -237,7 +241,7 @@ class Tooltip:
 class AdminDashboard(ctk.CTkFrame):
     """Tableau de bord administrateur moderne avec design professionnel"""
     
-    def __init__(self, parent, language: str = "FR", theme: ThemeManager = None, initial_view: str = "dashboard"):
+    def __init__(self, parent, language: str = "FR", theme: ThemeManager = None, initial_view: str = "dashboard", current_user: dict = None):
         super().__init__(parent)
         
         self.parent_window = parent
@@ -253,6 +257,11 @@ class AdminDashboard(ctk.CTkFrame):
         self.translator = Translator(language)
         set_current_language(language)
         self.theme = theme if theme else ThemeManager("light")
+        self.current_user = current_user or {}
+        self.current_user_role = str(self.current_user.get("role") or "user").strip().lower()
+        self.current_user_email = str(self.current_user.get("email") or "").strip().lower()
+        self.is_super_admin = self.current_user_role == "super_admin"
+        self.is_limited_user = self.current_user_role == "user"
         self.current_view = initial_view if initial_view else "dashboard"
         self.dashboard_service = DashboardService()
         self.student_service = StudentService()
@@ -279,6 +288,8 @@ class AdminDashboard(ctk.CTkFrame):
         self._last_resize_size = None
         self._initial_layout_stabilized = False
         self._translation_watchdog_job = None
+        self._idle_last_activity = time.monotonic()
+        self._idle_check_job = None
         
         # Adaptive sidebar widths based on screen size
         if self.screen_width < 900:
@@ -380,19 +391,33 @@ class AdminDashboard(ctk.CTkFrame):
             logger.info("FaceRecognitionService initialized on-demand")
         return self.face_service
 
-    def _get_cached_data(self, cache_key: str, loader, ttl_seconds: float = 5.0):
-        """Retourne des données mises en cache pendant un court instant pour fluidifier la navigation."""
+    def _get_cached_data(self, cache_key: str, loader, ttl_seconds: float = 30.0):
+        """Retourne des données en cache (stratégie stale-while-revalidate).
+
+        - Si les données existent en cache (même périmées) : retour immédiat + rafraîchissement
+          silencieux en arrière-plan si le TTL est dépassé.
+        - Si le cache est vide (premier accès) : chargement synchrone bloquant.
+        Cela rend toutes les navigations après la première quasi-instantanées.
+        """
         try:
             now = time.monotonic()
             cached = self._view_data_cache.get(cache_key)
-            if cached and (now - cached["timestamp"]) < ttl_seconds:
+            if cached:
+                # Données présentes : retour immédiat
+                if (now - cached["timestamp"]) >= ttl_seconds:
+                    # Périmées : lancer un rafraîchissement silencieux en arrière-plan
+                    self._queue_prefetch(cache_key, loader)
                 return cached["value"]
 
+            # Cache vide (tout premier accès) : chargement synchrone
             value = loader()
             self._view_data_cache[cache_key] = {"timestamp": now, "value": value}
             return value
         except Exception:
-            return loader()
+            try:
+                return loader()
+            except Exception:
+                return []
 
     def _invalidate_view_cache(self, *cache_keys):
         """Invalide tout ou partie du cache UI après une mutation de données."""
@@ -448,6 +473,15 @@ class AdminDashboard(ctk.CTkFrame):
         prefetch_map = {
             "students_all_with_finance": self.student_service.get_all_students_with_finance,
             "academic_years": self.academic_year_service.get_years,
+            "promotions_with_fees": self.student_service.get_promotions_with_fees,
+            "active_academic_year": self.academic_year_service.get_active_year,
+            "transfer_faculties": self.student_service.get_faculties,
+            "faculty_stats_with_photos": self.dashboard_service.get_faculty_stats_with_photos,
+            "access_stats": lambda: {
+                "granted": self.dashboard_service.get_access_granted(),
+                "denied": self.dashboard_service.get_access_denied(),
+            },
+            "access_logs_list": self.dashboard_service.get_access_logs_with_students,
             "finance_snapshot": lambda: {
                 "revenue": self.dashboard_service.get_revenue_collected(),
                 "payment_status": self.dashboard_service.get_students_by_payment_status(),
@@ -495,6 +529,52 @@ class AdminDashboard(ctk.CTkFrame):
         except Exception:
             pass
         self._translation_watchdog_job = None
+
+    def _start_idle_watcher(self):
+        """Démarre la surveillance d'inactivité (déconnexion auto après 30 min)."""
+        self._idle_last_activity = time.monotonic()
+        try:
+            top = self.winfo_toplevel()
+            top.bind_all("<Motion>", self._reset_idle_timer, add="+")
+            top.bind_all("<ButtonPress>", self._reset_idle_timer, add="+")
+            top.bind_all("<KeyPress>", self._reset_idle_timer, add="+")
+        except Exception:
+            pass
+        self._idle_check_job = self.after(60_000, self._idle_check_tick)
+
+    def _reset_idle_timer(self, _event=None):
+        """Réinitialise le compteur d'inactivité dès qu'une action est détectée."""
+        self._idle_last_activity = time.monotonic()
+
+    def _idle_check_tick(self):
+        """Vérifie toutes les minutes si l'inactivité dépasse 30 minutes."""
+        if not self.winfo_exists():
+            return
+        elapsed = time.monotonic() - self._idle_last_activity
+        if elapsed >= 1800:  # 30 minutes
+            logger.info("Déconnexion automatique après 30 minutes d'inactivité.")
+            try:
+                self._on_logout()
+            except Exception:
+                pass
+        else:
+            self._idle_check_job = self.after(60_000, self._idle_check_tick)
+
+    def _stop_idle_watcher(self):
+        """Annule la surveillance d'inactivité et détache les bindings."""
+        try:
+            if self._idle_check_job:
+                self.after_cancel(self._idle_check_job)
+        except Exception:
+            pass
+        self._idle_check_job = None
+        try:
+            top = self.winfo_toplevel()
+            top.unbind_all("<Motion>")
+            top.unbind_all("<ButtonPress>")
+            top.unbind_all("<KeyPress>")
+        except Exception:
+            pass
 
     def _render_in_batches(self, render_key: str, items, render_item, batch_size: int = 18, delay_ms: int = 1, on_complete=None):
         """Construit une liste d'éléments UI par lots pour éviter de figer l'interface."""
@@ -801,6 +881,27 @@ class AdminDashboard(ctk.CTkFrame):
         text = self.translator.get(key, default)
         return self.translator.translate_literal(text)
 
+    def _can_access_view(self, view_key: str) -> bool:
+        """Détermine si l'utilisateur courant peut accéder à une vue."""
+        if view_key == "access_requests":
+            return self.is_super_admin
+        if self.is_limited_user and view_key in {"academic_data", "academic_years", "transfers"}:
+            return False
+        return True
+
+    def _handle_forbidden_view(self, view_key: str):
+        """Affiche un message de refus et revient sur le dashboard."""
+        messagebox.showwarning(
+            self._t("access_denied", "Accès refusé"),
+            self._t(
+                "access_denied_message",
+                "Vous n'avez pas l'autorisation d'accéder à cette page."
+            ),
+        )
+        self.current_view = "dashboard"
+        self._persist_ui_context(view=self.current_view)
+        self._show_dashboard()
+
     def _translate_widget_tree(self, root_widget=None):
         """Traduit récursivement les textes visibles des widgets CustomTkinter.
 
@@ -974,7 +1075,10 @@ class AdminDashboard(ctk.CTkFrame):
             "exam_periods": self._show_exam_periods,
             "academic_data": self._show_student_academic_data,
             "transfers": self._show_transfers,
+            "access_requests": self._show_access_requests,
         }
+        if not self._can_access_view(self.current_view):
+            self.current_view = "dashboard"
         view_map.get(self.current_view, self._show_dashboard)()
         self._translate_all_windows()
 
@@ -1032,16 +1136,21 @@ class AdminDashboard(ctk.CTkFrame):
             pass
 
     def _run_with_loading(self, action, text: str = "Chargement..."):
-        """Exécute une action en affichant un loader pour éviter l'effet de recharge."""
+        """Navigation fluide : affiche l'overlay, laisse Tkinter le peindre, puis exécute l'action.
+
+        En différant l'exécution via after(), l'overlay est visible AVANT que le
+        fil principal ne soit occupé à construire les widgets → feedback immédiat.
+        """
         self._show_loading_overlay(text)
-        try:
+
+        def _execute_and_hide():
             try:
-                self.update_idletasks()
-            except Exception:
-                pass
-            action()
-        finally:
-            self._hide_loading_overlay()
+                action()
+            finally:
+                self._hide_loading_overlay()
+
+        # 20 ms suffisent pour que Tkinter peigne l'overlay avant de bloquer
+        self.after(20, _execute_and_hide)
     
     def _create_ui(self):
         """Crée l'interface moderne du dashboard"""
@@ -1160,6 +1269,14 @@ class AdminDashboard(ctk.CTkFrame):
             ("📋", "access_logs", self._t("access_logs", "Logs d'Accès"), lambda: self._run_with_loading(self._show_access_logs)),
             ("📈", "reports", self._t("reports", "Rapports"), lambda: self._run_with_loading(self._show_reports)),
         ]
+
+        if self.is_super_admin:
+            nav_items.insert(
+                2,
+                ("✅", "access_requests", self._t("access_requests", "Demandes d'accès"), lambda: self._run_with_loading(self._show_access_requests)),
+            )
+
+        nav_items = [item for item in nav_items if self._can_access_view(item[1])]
         
         self.nav_buttons = []
         for icon, key, label, callback in nav_items:
@@ -1307,7 +1424,10 @@ class AdminDashboard(ctk.CTkFrame):
         # encore leur taille finale au tout premier rendu.
         self.after(90, self._stabilize_initial_layout)
         self.after(260, self._stabilize_initial_layout)
-        self._schedule_heavy_views_prefetch()
+        # Préchauffer le cache plus tôt pour que les premières navigations soient instantanées
+        self._schedule_heavy_views_prefetch(delay_ms=80)
+        # Démarrer la surveillance d'inactivité (déconnexion auto après 30 min)
+        self.after(500, self._start_idle_watcher)
 
     def _stabilize_initial_layout(self):
         """Force un recalcul complet du layout juste après l'affichage initial.
@@ -1413,36 +1533,47 @@ class AdminDashboard(ctk.CTkFrame):
 
     def _animate_view_transition(self):
         """Animation glissante de transition entre vues"""
-        if not hasattr(self, "content_container"):
+        # Transition instantanée : aucun glissement visible
+        if not hasattr(self, "content_frame"):
             return
+        try:
+            self.content_frame.place_configure(x=0, y=0, relwidth=1, relheight=1)
+        except Exception:
+            pass
 
-        self.content_container.update_idletasks()
-        width = self.content_container.winfo_width() or 1200
-        self.content_frame.place_configure(x=width, y=0, relwidth=1, relheight=1)
-
-        def slide(x):
-            if x <= 0:
-                self.content_frame.place_configure(x=0, y=0, relwidth=1, relheight=1)
-                return
-            self.content_frame.place_configure(x=x, y=0, relwidth=1, relheight=1)
-            self.after(10, lambda: slide(x - max(40, width // 20)))
-
-        slide(width)
-
-    def _fit_dialog_to_viewport(self, window, min_width=320, min_height=120, width_ratio=0.92, height_ratio=0.88):
-        """Ajuste une fenêtre secondaire pour qu'elle reste toujours visible à l'écran."""
+    def _center_and_show_dialog(self, window):
+        """Centre une fenêtre de dialogue sur l'écran sans l'agrandir."""
         if not window:
             return
 
         try:
-            fit_existing_dialog(
-                self,
-                window,
-                min_width=min_width,
-                min_height=min_height,
-                width_ratio=width_ratio,
-                height_ratio=height_ratio,
-            )
+            if not window.winfo_exists():
+                return
+            window.update_idletasks()
+        except Exception:
+            return
+
+        try:
+            # Ne pas agrandir au-delà de ce qui est défini, juste centrer
+            window_width = window.winfo_width()
+            window_height = window.winfo_height()
+
+            parent = self.winfo_toplevel()
+            parent_width = parent.winfo_width() or self.screen_width
+            parent_height = parent.winfo_height() or self.screen_height
+            parent_x = parent.winfo_rootx() if parent.winfo_ismapped() else 0
+            parent_y = parent.winfo_rooty() if parent.winfo_ismapped() else 0
+
+            x = parent_x + max(0, (parent_width - window_width) // 2)
+            y = parent_y + max(0, (parent_height - window_height) // 2)
+
+            # Vérifier que la fenêtre reste à l'écran
+            max_x = max(0, self.screen_width - window_width)
+            max_y = max(0, self.screen_height - window_height)
+            x = max(0, min(x, max_x))
+            y = max(0, min(y, max_y))
+
+            window.geometry(f"+{x}+{y}")
         except Exception:
             pass
 
@@ -1463,40 +1594,28 @@ class AdminDashboard(ctk.CTkFrame):
         except Exception:
             pass
 
-        self._fit_dialog_to_viewport(window)
-
-        # Center la fenêtre sur l'écran
         try:
-            window_width = window.winfo_width()
-            window_height = window.winfo_height()
-            
-            # Si dimensions pas encore calculées, utiliser screen
-            if window_width == 1 or window_height == 1:
-                window.update_idletasks()
-                window_width = window.winfo_width()
-                window_height = window.winfo_height()
-            
-            screen_width = self.screen_width
-            screen_height = self.screen_height
-            
-            # Position centré
-            x = (screen_width - window_width) // 2
-            y = (screen_height - window_height) // 2
-            
-            # S'assurer que la fenêtre n'est pas en dehors de l'écran
-            x = max(0, min(x, screen_width - window_width))
-            y = max(0, min(y, screen_height - window_height))
-            
-            window.geometry(f"+{x}+{y}")
+            window.withdraw()
         except Exception:
             pass
 
-        try:
-            window.deiconify()
-            window.lift()
-            window.focus_set()
-        except Exception:
-            pass
+        def finalize_open():
+            try:
+                if not window.winfo_exists():
+                    return
+            except Exception:
+                return
+
+            self._center_and_show_dialog(window)
+
+            try:
+                window.deiconify()
+                window.lift()
+                window.focus_set()
+            except Exception:
+                pass
+
+        window.after(50, finalize_open)
 
     def _show_loading_dialog(self, title: str = "Traitement en cours..."):
         """Affiche un dialog avec un loading indicator
@@ -1516,6 +1635,8 @@ class AdminDashboard(ctk.CTkFrame):
         loading = LoadingIndicator(container, text=title, color=self.colors.get("primary", "#3b82f6"))
         loading.pack(fill="x", expand=True)
         loading.start()
+
+        self._animate_window_open(dialog)
 
         self._animate_window_open(dialog)
         return dialog, loading
@@ -2247,7 +2368,7 @@ class AdminDashboard(ctk.CTkFrame):
                 "completion": self.dashboard_service.get_degree_of_completion(),
                 "activities": self.dashboard_service.get_recent_activities(8),
             },
-            ttl_seconds=5.0,
+            ttl_seconds=30.0,
         )
         total = snap["total_students"]
         eligible = snap["eligible_students"]
@@ -2651,7 +2772,7 @@ class AdminDashboard(ctk.CTkFrame):
         self.students_full_data_all = self._get_cached_data(
             "students_all_with_finance",
             self.student_service.get_all_students_with_finance,
-            ttl_seconds=8.0,
+            ttl_seconds=45.0,
         )
 
         # Si l'année sélectionnée n'a aucun étudiant, réinitialiser le filtre
@@ -2700,7 +2821,7 @@ class AdminDashboard(ctk.CTkFrame):
         academic_years = self._get_cached_data(
             "academic_years",
             self.academic_year_service.get_years,
-            ttl_seconds=15.0,
+            ttl_seconds=60.0,
         )
         year_names = [y.get("year_name") for y in academic_years if y.get("year_name")]
         self.academic_year_map = {y.get("year_name"): y.get("academic_year_id") for y in academic_years}
@@ -3396,21 +3517,18 @@ class AdminDashboard(ctk.CTkFrame):
         dialog = ctk.CTkToplevel(self)
         dialog.title("Inscription Étudiant")
         
-        # Responsive sizing: compact pour tenir dans l'écran
-        if self.screen_width < 1200:
-            dialog_width = min(520, max(420, int(self.screen_width * 0.45)))
-            dialog_height = min(650, max(550, int(self.screen_height * 0.65)))
-        else:
-            dialog_width = min(600, max(520, int(self.screen_width * 0.4)))
-            dialog_height = min(700, max(600, int(self.screen_height * 0.70)))
+        # Compact sizing - smaller initial size
+        dialog_width = 480
+        dialog_height = 520
         
         dialog.geometry(f"{dialog_width}x{dialog_height}")
         dialog.grab_set()
+        dialog.resizable(True, True)
         
         # Background moderne
         dialog.configure(fg_color=self.colors["main_bg"])
         
-        self._animate_window_open(dialog)
+        self._center_and_show_dialog(dialog)
 
         # === HEADER ÉLÉGANT (COMPACT) ===
         header = ctk.CTkFrame(dialog, fg_color=self.colors["primary"], corner_radius=0, height=55)
@@ -3883,22 +4001,13 @@ class AdminDashboard(ctk.CTkFrame):
         """Ouvre la fenêtre de modification complète d'un étudiant"""
         dialog = ctk.CTkToplevel(self)
         dialog.title("Modifier étudiant")
-        dialog_width = min(620, max(520, int(self.screen_width * 0.5)))
-        dialog_height = min(720, max(600, int(self.screen_height * 0.72)))
+        dialog_width = 520
+        dialog_height = 580
         
-        # Centrer sur le dashboard
-        dashboard_x = self.winfo_rootx()
-        dashboard_y = self.winfo_rooty()
-        dashboard_width = self.winfo_width()
-        dashboard_height = self.winfo_height()
-        
-        center_x = dashboard_x + (dashboard_width - dialog_width) // 2
-        center_y = dashboard_y + (dashboard_height - dialog_height) // 2
-        
-        dialog.geometry(f"{dialog_width}x{dialog_height}+{center_x}+{center_y}")
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
         dialog.grab_set()
-        dialog.resizable(False, False)
-        self._animate_window_open(dialog)
+        dialog.resizable(True, True)
+        self._center_and_show_dialog(dialog)
 
         student_id = student.get("id")
         details = self.student_service.get_student_with_academics(student_id) or student
@@ -4131,23 +4240,14 @@ class AdminDashboard(ctk.CTkFrame):
         dialog = ctk.CTkToplevel(self)
         dialog.title("Enregistrer un paiement")
         
-        # Dimension responsive et centré
-        dialog_width = min(520, max(400, int(self.screen_width * 0.4)))
-        dialog_height = min(480, max(360, int(self.screen_height * 0.5)))
+        # Compact sizing
+        dialog_width = 420
+        dialog_height = 400
         
-        # Centrer sur le dashboard
-        dashboard_x = self.winfo_rootx()
-        dashboard_y = self.winfo_rooty()
-        dashboard_width = self.winfo_width()
-        dashboard_height = self.winfo_height()
-        
-        center_x = dashboard_x + (dashboard_width - dialog_width) // 2
-        center_y = dashboard_y + (dashboard_height - dialog_height) // 2
-        
-        dialog.geometry(f"{dialog_width}x{dialog_height}+{center_x}+{center_y}")
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
         dialog.grab_set()
-        dialog.resizable(False, False)
-        self._animate_window_open(dialog)
+        dialog.resizable(True, True)
+        self._center_and_show_dialog(dialog)
 
         fullname = f"{student.get('firstname', '')} {student.get('lastname', '')}".strip()
         student_number = student.get("student_number", "-")
@@ -4370,22 +4470,13 @@ class AdminDashboard(ctk.CTkFrame):
         """Ouvre la fenêtre d'historique de paiements par étudiant"""
         dialog = ctk.CTkToplevel(self)
         dialog.title("Historique des paiements")
-        dialog_width = min(720, max(560, int(self.screen_width * 0.6)))
-        dialog_height = min(600, max(420, int(self.screen_height * 0.7)))
+        dialog_width = 540
+        dialog_height = 480
         
-        # Centrer sur le dashboard
-        dashboard_x = self.winfo_rootx()
-        dashboard_y = self.winfo_rooty()
-        dashboard_width = self.winfo_width()
-        dashboard_height = self.winfo_height()
-        
-        center_x = dashboard_x + (dashboard_width - dialog_width) // 2
-        center_y = dashboard_y + (dashboard_height - dialog_height) // 2
-        
-        dialog.geometry(f"{dialog_width}x{dialog_height}+{center_x}+{center_y}")
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
         dialog.grab_set()
-        dialog.resizable(False, False)
-        self._animate_window_open(dialog)
+        dialog.resizable(True, True)
+        self._center_and_show_dialog(dialog)
 
         fullname = f"{student.get('firstname', '')} {student.get('lastname', '')}".strip()
         student_number = student.get("student_number", "-")
@@ -4550,7 +4641,7 @@ class AdminDashboard(ctk.CTkFrame):
                 "payment_status": self.dashboard_service.get_students_by_payment_status(),
                 "payments": self.dashboard_service.get_students_finance_overview(),
             },
-            ttl_seconds=5.0,
+            ttl_seconds=30.0,
         )
         revenue = finance_snapshot["revenue"]
         payment_status = finance_snapshot["payment_status"]
@@ -4747,9 +4838,17 @@ class AdminDashboard(ctk.CTkFrame):
         # === STATISTIQUES RAPIDES ===
         stats_frame = ctk.CTkFrame(self.content_frame)
         stats_frame.pack(fill="x", pady=(0, 20))
-        
-        granted = self.dashboard_service.get_access_granted()
-        denied = self.dashboard_service.get_access_denied()
+
+        access_stats = self._get_cached_data(
+            "access_stats",
+            lambda: {
+                "granted": self.dashboard_service.get_access_granted(),
+                "denied": self.dashboard_service.get_access_denied(),
+            },
+            ttl_seconds=30.0,
+        )
+        granted = access_stats["granted"]
+        denied = access_stats["denied"]
         total_attempts = granted + denied
         
         stat_items = [
@@ -4795,7 +4894,11 @@ class AdminDashboard(ctk.CTkFrame):
         scroll_frame = ctk.CTkScrollableFrame(table_zone, fg_color="transparent")
         scroll_frame.pack(fill="both", expand=True, padx=0, pady=(15, 0))
         
-        logs = self.dashboard_service.get_access_logs_with_students()
+        logs = self._get_cached_data(
+            "access_logs_list",
+            self.dashboard_service.get_access_logs_with_students,
+            ttl_seconds=30.0,
+        )
         if not logs:
             ctk.CTkLabel(
                 scroll_frame, text="Aucun log trouvé.", font=ctk.CTkFont(size=12), text_color=self.colors["text_light"]
@@ -4879,7 +4982,11 @@ class AdminDashboard(ctk.CTkFrame):
         scroll_frame = ctk.CTkScrollableFrame(table_zone, fg_color="transparent")
         scroll_frame.pack(fill="both", expand=True, padx=0, pady=(15, 0))
         
-        faculties_data = self.dashboard_service.get_faculty_stats_with_photos()
+        faculties_data = self._get_cached_data(
+            "faculty_stats_with_photos",
+            self.dashboard_service.get_faculty_stats_with_photos,
+            ttl_seconds=30.0,
+        )
         faculty_names = sorted({f.get("faculty_name") for f in faculties_data if f.get("faculty_name")})
         faculties = ["Toutes"] + faculty_names
         faculty_combo = ctk.CTkComboBox(filter_frame, values=faculties, width=150, height=30)
@@ -4929,16 +5036,273 @@ class AdminDashboard(ctk.CTkFrame):
 
         render_faculty_stats("Toutes")
         faculty_combo.configure(command=lambda value: render_faculty_stats(value))
+
+    def _show_access_requests(self):
+        """Affiche les demandes d'accès en attente (super admin uniquement)."""
+        if not self._can_access_view("access_requests"):
+            self._handle_forbidden_view("access_requests")
+            return
+
+        self.current_view = "access_requests"
+        self._persist_ui_context(view=self.current_view)
+        self._clear_content()
+        self._update_nav_buttons("access_requests")
+        self.title_label.configure(text=self._t("access_management_title", "Gestion des Accès"))
+        self.subtitle_label.configure(text=self._t("access_management_subtitle", "Demandes en attente & utilisateurs approuvés"))
+
+        reviewer = self.current_user_email or "super_admin"
+
+        outer = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        outer.pack(fill="both", expand=True, padx=20, pady=12)
+
+        tab_bar = ctk.CTkFrame(outer, fg_color=self.colors["card_bg"], corner_radius=10)
+        tab_bar.pack(fill="x", pady=(0, 12))
+
+        tab_btn_frame = ctk.CTkFrame(tab_bar, fg_color="transparent")
+        tab_btn_frame.pack(fill="x", padx=10, pady=8)
+
+        tab_content = ctk.CTkFrame(outer, fg_color="transparent")
+        tab_content.pack(fill="both", expand=True)
+
+        current_tab = {"key": "pending"}
+        tab_btns = {}
+
+        def _switch_tab(key):
+            current_tab["key"] = key
+            for k, btn in tab_btns.items():
+                if k == key:
+                    btn.configure(fg_color=self.colors["primary"], text_color=self.colors["text_white"])
+                else:
+                    btn.configure(fg_color="transparent", text_color=self.colors["text_dark"])
+            for w in tab_content.winfo_children():
+                w.destroy()
+            if key == "pending":
+                _render_pending(tab_content)
+            else:
+                _render_users(tab_content)
+
+        def _render_pending(parent):
+            card = self._create_card(parent)
+            card.pack(fill="both", expand=True)
+
+            ctk.CTkLabel(
+                card, text=f"✅  {self._t('pending_access_requests_title', 'Demandes en attente de validation')}",
+                font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_dark"],
+            ).pack(anchor="w", padx=20, pady=(16, 4))
+
+            pending = self._get_cached_data(
+                "pending_access_requests",
+                self.auth_service.get_pending_access_requests,
+                ttl_seconds=15.0,
+            )
+
+            if not pending:
+                ctk.CTkLabel(
+                    card, text=f"✔  {self._t('no_pending_requests', 'Aucune demande en attente.')}",
+                    font=ctk.CTkFont(size=12), text_color=self.colors["text_light"],
+                ).pack(anchor="w", padx=20, pady=16)
+                return
+
+            body = ctk.CTkScrollableFrame(card, fg_color="transparent")
+            body.pack(fill="both", expand=True, padx=20, pady=(6, 16))
+
+            for req in pending:
+                row = ctk.CTkFrame(body, fg_color=self.colors["hover"], corner_radius=8)
+                row.pack(fill="x", pady=5)
+
+                left = ctk.CTkFrame(row, fg_color="transparent")
+                left.pack(side="left", fill="both", expand=True, padx=14, pady=10)
+
+                requested_at = req.get("requested_at")
+                if hasattr(requested_at, "strftime"):
+                    requested_at = requested_at.strftime("%Y-%m-%d %H:%M")
+
+                ctk.CTkLabel(
+                    left, text=f"👤  {req.get('username', '-')}",
+                    font=ctk.CTkFont(size=13, weight="bold"), text_color=self.colors["text_dark"], anchor="w",
+                ).pack(anchor="w")
+                ctk.CTkLabel(
+                    left, text=f"📧  {req.get('email', '-')}   •   🕒  {requested_at or '-'}",
+                    font=ctk.CTkFont(size=11), text_color=self.colors["text_light"], anchor="w",
+                ).pack(anchor="w", pady=(3, 0))
+
+                actions = ctk.CTkFrame(row, fg_color="transparent")
+                actions.pack(side="right", padx=14, pady=10)
+
+                def _approve(rid=req.get("id")):
+                    self._invalidate_view_cache("pending_access_requests", "approved_administrators")
+                    ok, msg = self.auth_service.approve_access_request(rid, reviewer_identifier=reviewer)
+                    if ok:
+                        messagebox.showinfo(self._t("success", "Succès"), msg)
+                        _switch_tab("pending")
+                    else:
+                        messagebox.showerror(self._t("error", "Erreur"), msg)
+
+                def _reject(rid=req.get("id")):
+                    if not messagebox.askyesno(
+                        self._t("confirmation", "Confirmation"),
+                        self._t("reject_request_confirm", "Rejeter cette demande d'accès ?"),
+                    ):
+                        return
+                    self._invalidate_view_cache("pending_access_requests")
+                    ok, msg = self.auth_service.reject_access_request(rid, reviewer_identifier=reviewer)
+                    if ok:
+                        messagebox.showinfo(self._t("success", "Succès"), msg)
+                        _switch_tab("pending")
+                    else:
+                        messagebox.showerror(self._t("error", "Erreur"), msg)
+
+                ctk.CTkButton(
+                    actions, text=f"✓  {self._t('approve', 'Valider')}", fg_color=self.colors["success"],
+                    hover_color="#059669", text_color=self.colors["text_white"],
+                    width=100, height=32, corner_radius=7, command=_approve,
+                ).pack(side="left", padx=(0, 8))
+                ctk.CTkButton(
+                    actions, text=f"✗  {self._t('reject', 'Rejeter')}", fg_color=self.colors["danger"],
+                    hover_color="#b91c1c", text_color=self.colors["text_white"],
+                    width=100, height=32, corner_radius=7, command=_reject,
+                ).pack(side="left")
+
+        def _render_users(parent):
+            card = self._create_card(parent)
+            card.pack(fill="both", expand=True)
+
+            ctk.CTkLabel(
+                card, text=f"👥  {self._t('approved_users_title', 'Utilisateurs approuvés')}",
+                font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_dark"],
+            ).pack(anchor="w", padx=20, pady=(16, 4))
+
+            admins = self._get_cached_data(
+                "approved_administrators",
+                self.auth_service.get_approved_administrators,
+                ttl_seconds=20.0,
+            )
+
+            if not admins:
+                ctk.CTkLabel(
+                    card, text=self._t("no_users_found", "Aucun utilisateur trouvé."),
+                    font=ctk.CTkFont(size=12), text_color=self.colors["text_light"],
+                ).pack(anchor="w", padx=20, pady=16)
+                return
+
+            hdr = ctk.CTkFrame(card, fg_color=self.colors["primary"], corner_radius=6)
+            hdr.pack(fill="x", padx=20, pady=(8, 0))
+            for col_txt in [
+                self._t("user", "Utilisateur"),
+                self._t("email", "Email"),
+                self._t("status", "Statut"),
+                self._t("role", "Rôle"),
+                self._t("action", "Action"),
+            ]:
+                ctk.CTkLabel(
+                    hdr, text=col_txt, font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color=self.colors["text_white"], anchor="w",
+                ).pack(side="left", expand=True, fill="x", padx=8, pady=7)
+
+            body = ctk.CTkScrollableFrame(card, fg_color="transparent")
+            body.pack(fill="both", expand=True, padx=20, pady=(4, 16))
+
+            for adm in admins:
+                is_sa = bool(adm.get("is_super_admin"))
+                is_active = bool(adm.get("is_active", 1))
+                adm_id = adm.get("id")
+
+                row = ctk.CTkFrame(body, fg_color=self.colors["hover"], corner_radius=6)
+                row.pack(fill="x", pady=4)
+
+                def _lbl(parent_w, text, color=None, weight="normal"):
+                    return ctk.CTkLabel(
+                        parent_w, text=text,
+                        font=ctk.CTkFont(size=12, weight=weight),
+                        text_color=color or self.colors["text_dark"], anchor="w",
+                    )
+
+                _lbl(row, f"👤  {adm.get('username', '-')}", weight="bold").pack(
+                    side="left", expand=True, fill="x", padx=10, pady=8)
+                _lbl(row, f"📧  {adm.get('email') or '-'}", self.colors["text_light"]).pack(
+                    side="left", expand=True, fill="x", padx=6, pady=8)
+
+                status_txt = (
+                    f"✅ {self._t('active', 'Actif')}" if is_active
+                    else f"🔴 {self._t('inactive', 'Inactif')}"
+                )
+                _lbl(row, status_txt, self.colors["success"] if is_active else self.colors["danger"]).pack(
+                    side="left", expand=True, fill="x", padx=6, pady=8)
+
+                role_txt = (
+                    f"⭐ {self._t('super_admin', 'Super Admin')}" if is_sa
+                    else f"🔧 {self._t('admin', 'Admin')}"
+                )
+                _lbl(row, role_txt, self.colors["warning"] if is_sa else self.colors["info"]).pack(
+                    side="left", expand=True, fill="x", padx=6, pady=8)
+
+                btn_f = ctk.CTkFrame(row, fg_color="transparent")
+                btn_f.pack(side="left", padx=8, pady=6)
+
+                if not is_sa:
+                    def _delete(aid=adm_id, uname=adm.get("username", "?")):
+                        if not messagebox.askyesno(
+                            self._t("confirm_delete_user", "Confirmer la suppression"),
+                            self._t(
+                                "delete_user_irreversible",
+                                "Supprimer définitivement l'utilisateur « {username} » ?\n\nCette action est irréversible.",
+                            ).format(username=uname),
+                            icon="warning",
+                        ):
+                            return
+                        self._invalidate_view_cache("approved_administrators", "dashboard_snapshot")
+                        ok, msg = self.auth_service.delete_administrator(
+                            aid, requester_is_super_admin=self.is_super_admin
+                        )
+                        if ok:
+                            messagebox.showinfo(self._t("success", "Succès"), msg)
+                            _switch_tab("users")
+                        else:
+                            messagebox.showerror(self._t("error", "Erreur"), msg)
+
+                    ctk.CTkButton(
+                        btn_f, text=f"🗑  {self._t('delete', 'Supprimer')}",
+                        fg_color=self.colors["danger"], hover_color="#b91c1c",
+                        text_color=self.colors["text_white"],
+                        width=110, height=30, corner_radius=7, command=_delete,
+                    ).pack()
+                else:
+                    ctk.CTkLabel(btn_f, text="—", font=ctk.CTkFont(size=11),
+                                 text_color=self.colors["text_light"]).pack()
+
+        for key, label in [
+            ("pending", f"📋  {self._t('access_tab_pending', 'Demandes en attente')}"),
+            ("users", f"👥  {self._t('access_tab_users', 'Utilisateurs approuvés')}"),
+        ]:
+            btn = ctk.CTkButton(
+                tab_btn_frame, text=label,
+                fg_color=self.colors["primary"] if key == "pending" else "transparent",
+                hover_color=self.colors["primary"],
+                text_color=self.colors["text_white"] if key == "pending" else self.colors["text_dark"],
+                corner_radius=8, height=38, font=ctk.CTkFont(size=13, weight="bold"),
+                command=lambda k=key: _switch_tab(k),
+            )
+            btn.pack(side="left", padx=5, expand=True, fill="x")
+            tab_btns[key] = btn
+
+        _render_pending(tab_content)
     
     def _show_academic_years(self):
         """Affiche la gestion des années académiques"""
+        if not self._can_access_view("academic_years"):
+            self._handle_forbidden_view("academic_years")
+            return
         self.current_view = "academic_years"
         self._persist_ui_context(view=self.current_view)
         self._clear_content()
         self._update_nav_buttons("academic_years")
         self.title_label.configure(text=self._t("academic_years_title", "Années Académiques"))
         self.subtitle_label.configure(text=self._t("academic_years_subtitle", "Gestion des seuils financiers et périodes d'examens"))
-        active_year = self.academic_year_service.get_active_year()
+        active_year = self._get_cached_data(
+            "active_academic_year",
+            self.academic_year_service.get_active_year,
+            ttl_seconds=60.0,
+        )
         
         # === Section: Frais & Seuils par Faculté → Promotion ===
         promo_card = self._create_card(self.content_frame)
@@ -4956,7 +5320,11 @@ class AdminDashboard(ctk.CTkFrame):
             filter_row, text="🏛️ Faculté:", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.colors["text_dark"]
         ).pack(side="left", padx=(0, 10))
 
-        promotions = self.student_service.get_promotions_with_fees()
+        promotions = self._get_cached_data(
+            "promotions_with_fees",
+            self.student_service.get_promotions_with_fees,
+            ttl_seconds=45.0,
+        )
         faculty_names = sorted({p.get("faculty_name") for p in promotions if p.get("faculty_name")})
         faculty_filter = ctk.CTkComboBox(
             filter_row, values=["Toutes Facultés"] + faculty_names, width=220, height=32
@@ -5244,6 +5612,7 @@ class AdminDashboard(ctk.CTkFrame):
             preview_window.title("📢 Prévisualisation des Notifications")
             preview_window.geometry("700x600")
             preview_window.grab_set()
+            preview_window.resizable(True, True)
             self._animate_window_open(preview_window)
             
             # Header
@@ -5418,21 +5787,9 @@ class AdminDashboard(ctk.CTkFrame):
                 progress_dialog = ctk.CTkToplevel(self)
                 progress_dialog.title("📬 Envoi des Notifications")
                 progress_dialog.geometry("400x150")
-                
-                # Centrer la fenêtre sur la fenêtre parent
-                progress_dialog.update_idletasks()
-                parent_x = self.winfo_x()
-                parent_y = self.winfo_y()
-                parent_w = self.winfo_width()
-                parent_h = self.winfo_height()
-                dialog_w = progress_dialog.winfo_width()
-                dialog_h = progress_dialog.winfo_height()
-                x = parent_x + (parent_w - dialog_w) // 2
-                y = parent_y + (parent_h - dialog_h) // 2
-                progress_dialog.geometry(f"400x150+{x}+{y}")
-                
                 progress_dialog.grab_set()
                 progress_dialog.resizable(False, False)
+                self._animate_window_open(progress_dialog)
                 
                 ctk.CTkLabel(
                     progress_dialog, text="📬 Envoi des notifications aux étudiants...",
@@ -5768,6 +6125,9 @@ class AdminDashboard(ctk.CTkFrame):
     
     def _show_student_academic_data(self):
         """Affiche l'interface de gestion des données académiques avec sélection hiérarchique"""
+        if not self._can_access_view("academic_data"):
+            self._handle_forbidden_view("academic_data")
+            return
         self.current_view = "academic_data"
         self._persist_ui_context(view=self.current_view)
         self._set_main_scrollbar_visible(True)
@@ -6085,7 +6445,7 @@ class AdminDashboard(ctk.CTkFrame):
                 ORDER BY s.lastname, s.firstname
             """
             
-            students = conn.execute_query(query, (self.academic_state['promotion_id']))
+            students = conn.execute_query(query, (self.academic_state['promotion_id'],))
             
             # Filtrer par recherche si nécessaire
             if search_text.strip():
@@ -6190,7 +6550,7 @@ class AdminDashboard(ctk.CTkFrame):
                 WHERE student_id = %s 
                 ORDER BY exam_date DESC, id DESC LIMIT 10
             """
-            grades = conn.execute_query(grades_query, (student['id']))
+            grades = conn.execute_query(grades_query, (student['id'],))
             
             # Récupérer les documents (augmenté à 10)
             docs_query = """
@@ -6198,7 +6558,7 @@ class AdminDashboard(ctk.CTkFrame):
                 WHERE student_id = %s 
                 ORDER BY id DESC LIMIT 10
             """
-            documents = conn.execute_query(docs_query, (student['id']))
+            documents = conn.execute_query(docs_query, (student['id'],))
             
             if not grades and not documents:
                 empty_label = ctk.CTkLabel(
@@ -6253,38 +6613,6 @@ class AdminDashboard(ctk.CTkFrame):
             
         except Exception as e:
             logger.error(f"Erreur affichage données académiques: {e}", exc_info=True)
-    
-    def _on_academic_student_selected(self, value):
-        """Appelé quand un étudiant est sélectionné"""
-        if not value or value == "Aucun étudiant disponible":
-            return
-        
-        student_number = value.split(" - ")[0]
-        selected_student = next(
-            (s for s in self.academic_students_list if s['student_number'] == student_number), None
-        )
-        
-        if selected_student:
-            self._display_academic_student_info(selected_student)
-    
-    def _display_academic_student_info(self, student):
-        """Affiche les info de l'étudiant sélectionné"""
-        try:
-            for widget in self.academic_info_frame.winfo_children():
-                widget.destroy()
-            
-            info_frame = ctk.CTkFrame(self.academic_info_frame)
-            info_frame.pack(fill="x", padx=15, pady=12)
-            
-            ctk.CTkLabel(
-                info_frame, text=f"👤 {student['firstname']} {student['lastname']}", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.colors["primary"]
-            ).pack(anchor="w", pady=2)
-            
-            ctk.CTkLabel(
-                info_frame, text=f"ID: {student['student_number']} | {student.get('promotion_name', 'N/A')}", font=ctk.CTkFont(size=10), text_color=self.colors["text_dark"]
-            ).pack(anchor="w", pady=2)
-        except Exception as e:
-            logger.error(f"Erreur affichage info étudiant académique: {e}")
     
     def _switch_academic_tab(self, tab_key, parent):
         """Change d'onglet dans les données académiques"""
@@ -6679,6 +7007,9 @@ class AdminDashboard(ctk.CTkFrame):
     
     def _show_transfers(self):
         """Affiche la page de gestion des transferts inter-universitaires"""
+        if not self._can_access_view("transfers"):
+            self._handle_forbidden_view("transfers")
+            return
         self.current_view = "transfers"
         self._persist_ui_context(view=self.current_view)
         self._set_main_scrollbar_visible(True)
@@ -6981,12 +7312,12 @@ class AdminDashboard(ctk.CTkFrame):
     # ========== TRANSFER CASCADE METHODS ==========
     
     def _get_transfer_faculties(self):
-        """Récupère toutes les facultés"""
-        try:
-            return self.student_service.get_faculties()
-        except Exception as e:
-            logger.error(f"Erreur récupération facultés: {e}", exc_info=True)
-            return []
+        """Récupère toutes les facultés (avec cache)."""
+        return self._get_cached_data(
+            "transfer_faculties",
+            self.student_service.get_faculties,
+            ttl_seconds=60.0,
+        )
     
     def _on_transfer_faculty_selected(self, faculty_name):
         """Gère la sélection d'une faculté"""
@@ -7199,7 +7530,11 @@ class AdminDashboard(ctk.CTkFrame):
         ).pack(side="left")
         
         # Get pending requests
-        pending_requests = self.transfer_service.get_pending_transfer_requests()
+        pending_requests = self._get_cached_data(
+            "pending_transfer_requests",
+            self.transfer_service.get_pending_transfer_requests,
+            ttl_seconds=20.0,
+        )
         
         if not pending_requests:
             # No requests
@@ -7284,7 +7619,11 @@ class AdminDashboard(ctk.CTkFrame):
         ).pack(side="left")
         
         # Get transfer history
-        history = self.transfer_service.get_transfer_history(limit=50)
+        history = self._get_cached_data(
+            "transfer_history",
+            lambda: self.transfer_service.get_transfer_history(limit=50),
+            ttl_seconds=20.0,
+        )
         
         if not history:
             # No history
@@ -7650,6 +7989,8 @@ class AdminDashboard(ctk.CTkFrame):
         dialog.geometry("700x600")
         dialog.transient(self)
         dialog.grab_set()
+        dialog.resizable(True, True)
+        self._animate_window_open(dialog)
         
         # Scroll frame
         scroll = ctk.CTkScrollableFrame(dialog, fg_color=self.colors["card_bg"])
@@ -7692,6 +8033,8 @@ class AdminDashboard(ctk.CTkFrame):
         dialog.geometry("500x400")
         dialog.transient(self)
         dialog.grab_set()
+        dialog.resizable(True, True)
+        self._animate_window_open(dialog)
         
         frame = ctk.CTkFrame(dialog, fg_color=self.colors["card_bg"])
         frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -7781,6 +8124,8 @@ class AdminDashboard(ctk.CTkFrame):
         dialog.geometry("500x300")
         dialog.transient(self)
         dialog.grab_set()
+        dialog.resizable(True, True)
+        self._animate_window_open(dialog)
         
         frame = ctk.CTkFrame(dialog, fg_color=self.colors["card_bg"])
         frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -7834,6 +8179,8 @@ class AdminDashboard(ctk.CTkFrame):
         dialog.geometry("700x600")
         dialog.transient(self)
         dialog.grab_set()
+        dialog.resizable(True, True)
+        self._animate_window_open(dialog)
         
         scroll = ctk.CTkScrollableFrame(dialog, fg_color=self.colors["card_bg"])
         scroll.pack(fill="both", expand=True, padx=20, pady=20)
@@ -7923,6 +8270,7 @@ class AdminDashboard(ctk.CTkFrame):
         """Déconnecte l'utilisateur"""
         logger.info("Déconnexion de l'utilisateur")
         try:
+            self._stop_idle_watcher()
             self._stop_translation_watchdog()
             self._stop_esp32_status_polling()
             if hasattr(self.parent_window, "handle_user_logout"):

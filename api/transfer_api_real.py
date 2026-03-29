@@ -17,6 +17,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.services.transfer.transfer_service import TransferService
+from config.settings import SECRET_KEY
 
 # Configuration basique du logger pour affichage console
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,7 +27,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Configuration
-app.config['SECRET_KEY'] = 'your-secret-key-here'  # À changer en production
+app.config['SECRET_KEY'] = SECRET_KEY
 app.config['API_VERSION'] = 'v1'
 
 transfer_service = TransferService()

@@ -112,6 +112,7 @@ try:
             self.current_screen = None
             self.login_screen = None
             self.dashboard = None
+            self.current_user = None
             self.language = "FR"
             self.theme = ThemeManager("light")
             self._page_transition_in_progress = False
@@ -165,6 +166,7 @@ try:
             On conserve les champs "Se souvenir de moi" pour pré-remplissage,
             mais on évite toute reconnexion automatique sans action utilisateur.
             """
+            self.current_user = None
             self._persist_state(auto_login=False)
 
         def update_ui_preferences(self, language=None, theme=None, last_view=None):
@@ -275,21 +277,29 @@ try:
             except Exception as e:
                 logger.debug(f"Force show error: {e}")
         
-        def _show_dashboard(self, language="FR", animate: bool = False):
+        def _show_dashboard(self, language="FR", animate: bool = False, user: dict = None):
             """Affiche le dashboard comme une nouvelle page de l'application."""
             logger.info("Showing dashboard")
             self.language = language
+            if user is not None:
+                self.current_user = user
             initial_view = self.app_state.get("last_view", "dashboard") or "dashboard"
 
             from ui.screens.admin.admin_dashboard import AdminDashboard
-            page_factory = lambda: AdminDashboard(parent=self, language=language, theme=self.theme, initial_view=initial_view)
+            page_factory = lambda: AdminDashboard(
+                parent=self,
+                language=language,
+                theme=self.theme,
+                initial_view=initial_view,
+                current_user=self.current_user,
+            )
             if animate:
                 self.dashboard = self._animate_page_transition("dashboard", page_factory)
             else:
                 self.dashboard = self._show_page("dashboard", page_factory)
             self.current_screen = "dashboard"
 
-        def open_dashboard_page(self, language="FR", progress=None):
+        def open_dashboard_page(self, language="FR", progress=None, user: dict = None):
             """Navigation centralisée depuis le login vers le dashboard."""
             nav_t0 = perf_counter()
             try:
@@ -297,7 +307,7 @@ try:
                 if progress:
                     progress.set_progress(45, translate_ui_text("Initialisation de la page d'accueil...", self.language))
 
-                self._show_dashboard(language=language, animate=True)
+                self._show_dashboard(language=language, animate=True, user=user)
 
                 if progress:
                     progress.set_progress(80, translate_ui_text("Chargement des données...", self.language))

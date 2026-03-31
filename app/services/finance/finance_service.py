@@ -184,6 +184,11 @@ class FinanceService:
             
             amount_paid = Decimal(str(finance['amount_paid']))
             threshold = Decimal(str(finance['threshold_required']))
+
+            # Règle métier: sans seuil configuré (0 ou NULL),
+            # on considère que le seuil n'est pas applicable (jamais "atteint").
+            if threshold <= 0:
+                return False
             
             is_eligible = amount_paid >= threshold
             logger.info(f"Student {student_id} threshold check: {is_eligible}")
@@ -237,6 +242,7 @@ class FinanceService:
             promotion_name = promo.get('promotion_name', 'N/A')
             department_name = promo.get('department_name', 'N/A')
             faculty_name = promo.get('faculty_name', 'N/A')
+            threshold_enabled = threshold > 0
 
             # ⚠️ VÉRIFICATION STRICTE: Pas de paiement si aucun frais n'est défini
             if final_fee <= 0:
@@ -253,7 +259,8 @@ class FinanceService:
                 )
                 return False
 
-            is_eligible = 1 if new_amount >= threshold else 0
+            # Sans seuil, ne jamais marquer "seuil atteint".
+            is_eligible = 1 if (threshold_enabled and new_amount >= threshold) else 0
             now = datetime.now()
 
             query = """
@@ -306,8 +313,8 @@ class FinanceService:
                         amount_paid=float(new_amount),
                         remaining_amount=float(remaining_amount),
                         final_fee=float(final_fee),
-                        threshold_amount=float(threshold),
-                        threshold_reached=bool(is_eligible),
+                        threshold_amount=float(threshold) if threshold_enabled else None,
+                        threshold_reached=bool(is_eligible) if threshold_enabled else None,
                         promotion_info=f"{faculty_name} / {department_name} / {promotion_name}"
                     )
                     if not success:
@@ -315,7 +322,7 @@ class FinanceService:
                     else:
                         logger.info(f"Notification sent successfully for student {student_id}")
 
-                    if is_eligible:
+                    if threshold_enabled and is_eligible:
                         is_full_paid = new_amount >= final_fee
                         self._issue_access_code_if_needed(student_id, is_full_paid)
                 except Exception as notify_err:

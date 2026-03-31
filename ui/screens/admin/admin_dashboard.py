@@ -288,6 +288,7 @@ class AdminDashboard(ctk.CTkFrame):
         self._last_resize_size = None
         self._initial_layout_stabilized = False
         self._translation_watchdog_job = None
+        self._watchdog_lang = None
         self._idle_last_activity = time.monotonic()
         self._idle_check_job = None
         
@@ -441,7 +442,7 @@ class AdminDashboard(ctk.CTkFrame):
             return
 
         cached = self._view_data_cache.get(cache_key)
-        if cached and (time.monotonic() - cached["timestamp"]) < 3.0:
+        if cached and (time.monotonic() - cached["timestamp"]) < 10.0:
             return
 
         self._prefetch_inflight.add(cache_key)
@@ -457,7 +458,7 @@ class AdminDashboard(ctk.CTkFrame):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _schedule_heavy_views_prefetch(self, delay_ms: int = 350):
+    def _schedule_heavy_views_prefetch(self, delay_ms: int = 500):
         """Planifie le préchargement des vues lourdes après stabilisation de l'UI."""
         try:
             if self._prefetch_after_job:
@@ -481,7 +482,6 @@ class AdminDashboard(ctk.CTkFrame):
                 "granted": self.dashboard_service.get_access_granted(),
                 "denied": self.dashboard_service.get_access_denied(),
             },
-            "access_logs_list": self.dashboard_service.get_access_logs_with_students,
             "finance_snapshot": lambda: {
                 "revenue": self.dashboard_service.get_revenue_collected(),
                 "payment_status": self.dashboard_service.get_students_by_payment_status(),
@@ -602,12 +602,6 @@ class AdminDashboard(ctk.CTkFrame):
                 render_item(items[item_index], item_index)
             current_index = end_index
 
-            # Traduire immédiatement les nouveaux widgets rendus dynamiquement
-            try:
-                self._translate_widget_tree(self.main_content)
-            except Exception:
-                pass
-
             if current_index < total_items:
                 render_state["job"] = self.after(delay_ms, step)
             else:
@@ -616,6 +610,7 @@ class AdminDashboard(ctk.CTkFrame):
                     on_complete()
 
         step()
+
 
     def _register_wrap(self, label, ratio: float = 0.35, min_width: int = 280, max_width: int = 600):
         """Enregistre un label pour ajuster automatiquement son wraplength"""
@@ -1013,10 +1008,18 @@ class AdminDashboard(ctk.CTkFrame):
         def _tick():
             if not self.winfo_exists():
                 return
-            self._translate_all_windows()
-            self._translation_watchdog_job = self.after(900, _tick)
+            # Only do full tree walk if language recently changed or on a slower tick
+            current_lang = getattr(self, "selected_language", None)
+            if current_lang != getattr(self, "_watchdog_lang", None):
+                self._watchdog_lang = current_lang
+                self._translate_all_windows()
+            else:
+                # Periodic light pass (less frequent)
+                self._translate_all_windows()
+            self._translation_watchdog_job = self.after(2500, _tick)
 
         self._translation_watchdog_job = self.after(250, _tick)
+        self._watchdog_lang = getattr(self, "selected_language", None)
 
     def _get_color_palette(self):
         """Retourne la palette selon le thème"""
@@ -1081,6 +1084,36 @@ class AdminDashboard(ctk.CTkFrame):
             self.current_view = "dashboard"
         view_map.get(self.current_view, self._show_dashboard)()
         self._translate_all_windows()
+
+    def _refresh_after_payment_success(self):
+        """Rafraîchit la vue de façon ciblée après un paiement (moins de reconstruction visible)."""
+        self._invalidate_view_cache(
+            "dashboard_snapshot",
+            "students_all_with_finance",
+            "finance_snapshot",
+        )
+        self._schedule_heavy_views_prefetch(delay_ms=500)
+
+        # Rafraîchissement léger de la vue active quand c'est possible.
+        if self.current_view == "students" and hasattr(self, "students_main_card"):
+            try:
+                self.students_full_data_all = self._get_cached_data(
+                    "students_all_with_finance",
+                    self.student_service.get_all_students_with_finance,
+                    ttl_seconds=45.0,
+                )
+                self._update_students_stats()
+                self._render_students_navigation()
+                return
+            except Exception as exc:
+                logger.debug(f"Light students refresh failed after payment: {exc}")
+
+        if self.current_view == "finance":
+            self._show_finance(getattr(self, "_finance_filter", "all"))
+            return
+
+        # Fallback sûr pour les autres vues.
+        self._render_current_view()
 
     def _ensure_loading_overlay(self):
         """Prépare un overlay de chargement pour masquer les rechargements visibles."""
@@ -1173,7 +1206,7 @@ class AdminDashboard(ctk.CTkFrame):
         self.logo_frame = logo_frame
         
         self.logo_title_label = ctk.CTkLabel(
-            logo_frame, text="U.O.R", font=ctk.CTkFont(size=32, weight="bold"), text_color=self.colors["text_white"]
+            logo_frame, text="U.O.R", font=ctk.CTkFont(size=32, weight="bold"), text_color=self.colors["text_dark"]
         )
         self.logo_title_label.pack()
         
@@ -1425,7 +1458,7 @@ class AdminDashboard(ctk.CTkFrame):
         self.after(90, self._stabilize_initial_layout)
         self.after(260, self._stabilize_initial_layout)
         # Préchauffer le cache plus tôt pour que les premières navigations soient instantanées
-        self._schedule_heavy_views_prefetch(delay_ms=80)
+        self._schedule_heavy_views_prefetch(delay_ms=600)
         # Démarrer la surveillance d'inactivité (déconnexion auto après 30 min)
         self.after(500, self._start_idle_watcher)
 
@@ -1959,7 +1992,7 @@ class AdminDashboard(ctk.CTkFrame):
         hover_color = self._shade_color(color, 0.9)
         
         # En-tête avec titre et icône
-        header = ctk.CTkFrame(card)
+        header = ctk.CTkFrame(card, fg_color="transparent")
         header.pack(fill="x", padx=12 if is_tiny_screen else (15 if is_small_screen else 20), pady=(12 if is_tiny_screen else (15 if is_small_screen else 20), 6 if is_tiny_screen else 8))
         
         title_size = 9 if is_tiny_screen else (10 if is_small_screen else 12)
@@ -2245,7 +2278,7 @@ class AdminDashboard(ctk.CTkFrame):
                 "weights": [1.2, 3, 1.2, 2, 2, 1.2, 1.2] if not is_small_screen else [1, 2, 1, 1.5, 1.5, 1, 1], "anchors": ["center", "w", "w", "e", "e", "center", "center"], "min_widths_large": [70, 220, 90, 150, 150, 110, 110], "min_widths_compact": [60, 170, 80, 120, 120, 95, 95], "min_widths_tiny": [50, 130, 70, 100, 100, 80, 80], }, "access_logs": {
                 "weights": [1.2, 3, 1.2, 2, 1, 1, 1, 1, 1.2] if not is_small_screen else [1, 2, 1, 1.5, 0.8, 0.8, 0.8, 0.8, 1], "anchors": ["center", "w", "w", "w", "center", "center", "center", "center", "e"], "min_widths_large": [70, 220, 90, 160, 90, 90, 90, 90, 100], "min_widths_compact": [60, 170, 80, 130, 75, 75, 75, 75, 90], "min_widths_tiny": [50, 130, 70, 100, 65, 65, 65, 65, 80], }, "reports_faculty": {
                 "weights": [1.2, 2.5, 2.5, 1.2, 1.2, 1.2, 2] if not is_small_screen else [1, 2, 2, 1, 1, 1, 1.5], "anchors": ["center", "w", "w", "center", "center", "center", "e"], "min_widths_large": [70, 180, 180, 120, 120, 120, 150], "min_widths_compact": [60, 150, 150, 110, 110, 110, 130], "min_widths_tiny": [50, 120, 120, 95, 95, 95, 110], }, "academic_promos": {
-                "weights": [2.2, 3, 3, 1.2, 1.2, 1.2, 1.2] if not is_small_screen else [2, 2.2, 2.2, 1, 1, 1, 1], "anchors": ["center", "center", "center", "center", "center", "center", "center"], "min_widths_large": [150, 180, 180, 90, 90, 90, 90], "min_widths_compact": [160, 180, 180, 80, 95, 95, 95], "min_widths_tiny": [140, 140, 140, 75, 85, 85, 85], }, "exam_periods": {
+                "weights": [2.2, 3, 3, 1.2, 1.6, 1.6, 1.4] if not is_small_screen else [2, 2.2, 2.2, 1, 1.4, 1.4, 1.2], "anchors": ["w", "w", "w", "center", "center", "center", "center"], "min_widths_large": [150, 180, 180, 90, 150, 150, 140], "min_widths_compact": [140, 170, 170, 80, 140, 140, 130], "min_widths_tiny": [120, 130, 130, 70, 120, 120, 115], }, "exam_periods": {
                 "weights": [3, 1.2, 1.2, 1.2] if not is_tiny_screen else [2, 1, 1, 1], "anchors": ["w", "center", "center", "e"], "min_widths_large": [220, 120, 120, 110], "min_widths_compact": [180, 100, 100, 95], "min_widths_tiny": [140, 85, 85, 80], }, }
 
         layout = layouts.get(key)
@@ -2368,7 +2401,7 @@ class AdminDashboard(ctk.CTkFrame):
                 "completion": self.dashboard_service.get_degree_of_completion(),
                 "activities": self.dashboard_service.get_recent_activities(8),
             },
-            ttl_seconds=30.0,
+            ttl_seconds=60.0,
         )
         total = snap["total_students"]
         eligible = snap["eligible_students"]
@@ -2529,8 +2562,9 @@ class AdminDashboard(ctk.CTkFrame):
             if w < 20 or h < 20:
                 return
             grid_col = "#2a2a3e" if is_dark else "#E5E7EB"
-            text_col = "#9CA3AF"
-            pl, pr, pt, pb = 45, 10, 15, 30
+            grid_text_col = "#9CA3AF" if is_dark else "#6B7280"
+            label_col = "#9CA3AF" if is_dark else "#1e293b"
+            pl, pr, pt, pb = 45, 10, 15, 45
             cw_c = w - pl - pr
             ch_c = h - pt - pb
             max_val = max(_bar_values) if any(v > 0 for v in _bar_values) else 1
@@ -2543,7 +2577,7 @@ class AdminDashboard(ctk.CTkFrame):
                 gv = max_val * (4 - gi) / 4
                 bar_canvas.create_text(
                     pl - 4, gy, text=f"{int(gv):,}",
-                    anchor="e", fill=text_col, font=("Segoe UI", 7)
+                    anchor="e", fill=grid_text_col, font=("Segoe UI", 7)
                 )
             for bi, (v, lbl_b, bc) in enumerate(zip(_bar_values, _bar_labels, _bar_colors)):
                 bx = pl + bi * slot_w + (slot_w - bw) / 2
@@ -2551,8 +2585,8 @@ class AdminDashboard(ctk.CTkFrame):
                 by = pt + ch_c - bh
                 bar_canvas.create_rectangle(bx, by, bx + bw, pt + ch_c, fill=bc, width=0)
                 bar_canvas.create_text(
-                    bx + bw / 2, pt + ch_c + 12, text=lbl_b,
-                    fill=text_col, font=("Segoe UI", 7)
+                    bx + bw / 2, pt + ch_c + 18, text=lbl_b,
+                    fill=label_col, font=("Segoe UI", 9, "bold")
                 )
             bar_canvas.create_line(pl, pt + ch_c, w - pr, pt + ch_c, fill=grid_col, width=1)
 
@@ -3351,7 +3385,7 @@ class AdminDashboard(ctk.CTkFrame):
                 
                 promo_header_padx = 10 if is_compact else 15
                 promo_header_pady = 6 if is_compact else 10
-                promo_header_content = ctk.CTkFrame(promo_header)
+                promo_header_content = ctk.CTkFrame(promo_header, fg_color="transparent")
                 promo_header_content.pack(fill="x", padx=promo_header_padx, pady=promo_header_pady)
                 
                 # Tailles de police augmentées pour meilleure lisibilité
@@ -3471,25 +3505,36 @@ class AdminDashboard(ctk.CTkFrame):
         # Actions
         action_frame = ctk.CTkFrame(row)
         action_frame.grid(row=0, column=6, sticky="ew", padx=10, pady=6)
-        
-        ctk.CTkButton(
+
+        def _bind_tooltip(btn, tip_text):
+            tip = Tooltip(btn, tip_text)
+            btn.bind("<Enter>", lambda e: tip.show_tooltip(e))
+            btn.bind("<Leave>", lambda e: tip.hide_tooltip())
+
+        edit_btn = ctk.CTkButton(
             action_frame, text="✏️", width=30, height=24, fg_color=self.colors["info"], hover_color="#0891b2", command=lambda s=student: self._open_edit_student_dialog(s)
-        ).pack(side="left", padx=2)
-        
-        ctk.CTkButton(
+        )
+        edit_btn.pack(side="left", padx=2)
+        _bind_tooltip(edit_btn, self._t("edit_student_tooltip", "Modifier l'étudiant"))
+
+        pay_btn = ctk.CTkButton(
             action_frame, text="💰", width=30, height=24, fg_color=self.colors["primary"], hover_color="#2563eb", command=lambda s=student: self._open_payment_dialog(s)
-        ).pack(side="left", padx=2)
-        
-        ctk.CTkButton(
+        )
+        pay_btn.pack(side="left", padx=2)
+        _bind_tooltip(pay_btn, self._t("payment_tooltip", "Enregistrer un paiement"))
+
+        hist_btn = ctk.CTkButton(
             action_frame, text="📜", width=30, height=24, fg_color=self.colors["warning"], hover_color="#f59e0b", command=lambda s=student: self._open_payment_history_dialog(s)
-        ).pack(side="left", padx=2)
+        )
+        hist_btn.pack(side="left", padx=2)
+        _bind_tooltip(hist_btn, self._t("payment_history_tooltip", "Historique des paiements"))
     
     def _create_stat_badge(self, parent, icon, text, color):
         """Crée un badge de statistique"""
         badge = ctk.CTkFrame(parent, fg_color=color, corner_radius=6)
         badge.bind("<Button-1>", lambda e: None)  # Propagate click to parent
         
-        content = ctk.CTkFrame(badge)
+        content = ctk.CTkFrame(badge, fg_color="transparent")
         content.pack(padx=8, pady=4)
         content.bind("<Button-1>", lambda e: None)
         
@@ -3535,7 +3580,7 @@ class AdminDashboard(ctk.CTkFrame):
         header.pack(fill="x", side="top")
         header.pack_propagate(False)
 
-        header_content = ctk.CTkFrame(header)
+        header_content = ctk.CTkFrame(header, fg_color="transparent")
         header_content.pack(fill="both", expand=True, padx=20, pady=10)
 
         ctk.CTkLabel(
@@ -4420,13 +4465,7 @@ class AdminDashboard(ctk.CTkFrame):
                         if success:
                             update_progress(100, "Paiement enregistré ✓")
                             self.after(1500, lambda: [
-                                self._invalidate_view_cache(
-                                    "dashboard_snapshot",
-                                    "students_all_with_finance",
-                                    "finance_snapshot",
-                                ),
-                                self._schedule_heavy_views_prefetch(delay_ms=250),
-                                ErrorManager.show_success("Succès", "Paiement enregistré avec succès.", dialog), dialog.destroy(), self._render_current_view()
+                                ErrorManager.show_success("Succès", "Paiement enregistré avec succès.", dialog), dialog.destroy(), self._refresh_after_payment_success()
                             ])
                         else:
                             progress_frame.pack_forget()
@@ -4641,7 +4680,7 @@ class AdminDashboard(ctk.CTkFrame):
                 "payment_status": self.dashboard_service.get_students_by_payment_status(),
                 "payments": self.dashboard_service.get_students_finance_overview(),
             },
-            ttl_seconds=30.0,
+            ttl_seconds=60.0,
         )
         revenue = finance_snapshot["revenue"]
         payment_status = finance_snapshot["payment_status"]
@@ -5294,6 +5333,7 @@ class AdminDashboard(ctk.CTkFrame):
             return
         self.current_view = "academic_years"
         self._persist_ui_context(view=self.current_view)
+        self._set_main_scrollbar_visible(True)
         self._clear_content()
         self._update_nav_buttons("academic_years")
         self.title_label.configure(text=self._t("academic_years_title", "Années Académiques"))
@@ -5306,7 +5346,7 @@ class AdminDashboard(ctk.CTkFrame):
         
         # === Section: Frais & Seuils par Faculté → Promotion ===
         promo_card = self._create_card(self.content_frame)
-        promo_card.pack(fill="both", expand=True, pady=(0, 20))
+        promo_card.pack(fill="x", expand=False, pady=(0, 12))
 
         ctk.CTkLabel(
             promo_card, text="🎓 Frais & Seuils par Faculté → Promotion", font=ctk.CTkFont(size=16, weight="bold"), text_color=self.colors["text_dark"]
@@ -5332,6 +5372,18 @@ class AdminDashboard(ctk.CTkFrame):
         faculty_filter.set("Toutes Facultés")
         faculty_filter.pack(side="left")
 
+        ctk.CTkButton(
+            filter_row,
+            text="📅 Gérer les périodes d'examens",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=self.colors["primary"],
+            hover_color=self.colors["info"],
+            text_color=self.colors["text_white"],
+            height=32,
+            corner_radius=8,
+            command=lambda: self._run_with_loading(self._show_exam_periods),
+        ).pack(side="right")
+
         promo_headers = ["Faculté", "Promotion", "Département", "Année", "Frais ($)", "Seuil ($)", "Action"]
         layout = self._get_table_layout("academic_promos", len(promo_headers))
         promo_weights = layout["weights"]
@@ -5340,7 +5392,10 @@ class AdminDashboard(ctk.CTkFrame):
         
         # Créer un container pour l'en-tête et les données avec scroll horizontal si nécessaire
         promo_table_container = ctk.CTkFrame(promo_card, fg_color="transparent")
-        promo_table_container.pack(fill="both", expand=True, padx=25, pady=(15, 20))
+        table_height = 330 if self.screen_width < 1100 else 360
+        promo_table_container.pack(fill="x", expand=False, padx=25, pady=(15, 16))
+        promo_table_container.configure(height=table_height)
+        promo_table_container.pack_propagate(False)
         
         # Utiliser la fonction générique de scroll horizontal
         promo_scroll = self._create_horizontal_scrollable_table(
@@ -5363,36 +5418,37 @@ class AdminDashboard(ctk.CTkFrame):
                 ).pack(pady=20)
                 return
 
-            for promo in filtered_promos:
-                row = ctk.CTkFrame(promo_scroll, fg_color=self.colors["hover"], corner_radius=6, height=50)
+            for row_index, promo in enumerate(filtered_promos):
+                row = ctk.CTkFrame(promo_scroll, fg_color="transparent", corner_radius=8, height=52)
                 row.pack(fill="x", pady=4)
                 row.pack_propagate(False)
                 self._configure_table_columns(row, promo_weights, min_widths=promo_min_widths)
+                self._style_table_row(row, row_index, enable_hover=True)
 
                 fee_value = promo.get('fee_usd') or 0
                 threshold_value = promo.get('threshold_amount') or 0
 
                 ctk.CTkLabel(
-                    row, text=promo.get('faculty_name') or "-", font=ctk.CTkFont(size=11), text_color=self.colors["text_light"], anchor="center"
+                    row, text=promo.get('faculty_name') or "-", font=ctk.CTkFont(size=11), text_color=self.colors["text_light"], anchor=promo_anchors[0]
                 ).grid(row=0, column=0, sticky="ew", padx=10, pady=8)
 
                 ctk.CTkLabel(
-                    row, text=promo.get('name') or "-", font=ctk.CTkFont(size=11), text_color=self.colors["text_dark"], anchor="center"
+                    row, text=promo.get('name') or "-", font=ctk.CTkFont(size=11), text_color=self.colors["text_dark"], anchor=promo_anchors[1]
                 ).grid(row=0, column=1, sticky="ew", padx=10, pady=8)
 
                 ctk.CTkLabel(
-                    row, text=promo.get('department_name') or "-", font=ctk.CTkFont(size=11), text_color=self.colors["text_light"], anchor="center"
+                    row, text=promo.get('department_name') or "-", font=ctk.CTkFont(size=11), text_color=self.colors["text_light"], anchor=promo_anchors[2]
                 ).grid(row=0, column=2, sticky="ew", padx=10, pady=8)
 
                 ctk.CTkLabel(
-                    row, text=str(promo.get('year') or "-"), font=ctk.CTkFont(size=11), text_color=self.colors["text_dark"], anchor="center"
+                    row, text=str(promo.get('year') or "-"), font=ctk.CTkFont(size=11), text_color=self.colors["text_dark"], anchor=promo_anchors[3]
                 ).grid(row=0, column=3, sticky="ew", padx=10, pady=8)
 
-                fee_entry = ctk.CTkEntry(row, justify="center")
+                fee_entry = ctk.CTkEntry(row, justify="center", width=120)
                 fee_entry.insert(0, f"{Decimal(str(fee_value)):.2f}")
                 fee_entry.grid(row=0, column=4, sticky="ew", padx=10, pady=8)
 
-                threshold_entry = ctk.CTkEntry(row, justify="center")
+                threshold_entry = ctk.CTkEntry(row, justify="center", width=120)
                 threshold_entry.insert(0, f"{Decimal(str(threshold_value)):.2f}")
                 threshold_entry.grid(row=0, column=5, sticky="ew", padx=10, pady=8)
 
@@ -5509,7 +5565,7 @@ class AdminDashboard(ctk.CTkFrame):
                     return _save
 
                 save_btn = ctk.CTkButton(
-                    row, text="Enregistrer", width=110, fg_color=self.colors["primary"], hover_color="#2563eb", text_color=self.colors["text_white"], command=make_save(promo.get('id'), fee_entry, threshold_entry, None)
+                    row, text="Enregistrer", width=120, fg_color=self.colors["primary"], hover_color="#2563eb", text_color=self.colors["text_white"], command=make_save(promo.get('id'), fee_entry, threshold_entry, None)
                 )
                 save_btn.grid(row=0, column=6, sticky="ew", padx=10, pady=8)
                 
@@ -5521,10 +5577,10 @@ class AdminDashboard(ctk.CTkFrame):
         
         # === Section: Périodes d'Examens (Bouton) ===
         exam_card = self._create_card(self.content_frame)
-        exam_card.pack(fill="both", expand=True, pady=(15, 0))
+        exam_card.pack(fill="x", expand=False, pady=(8, 0))
         
         exam_btn_frame = ctk.CTkFrame(exam_card, fg_color="transparent")
-        exam_btn_frame.pack(fill="x", padx=25, pady=20)
+        exam_btn_frame.pack(fill="x", padx=25, pady=14)
         
         ctk.CTkButton(
             exam_btn_frame, text="📅 Gérer les Périodes d'Examens", font=ctk.CTkFont(size=14, weight="bold"),
@@ -5701,6 +5757,20 @@ class AdminDashboard(ctk.CTkFrame):
         self._update_nav_buttons("academic_years")
         self.title_label.configure(text="📅 Gestion des Périodes d'Examens")
         self.subtitle_label.configure(text="Créez et organisez les sessions d'examen pour l'année académique")
+
+        back_row = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        back_row.pack(fill="x", pady=(0, 10))
+        ctk.CTkButton(
+            back_row,
+            text="⬅ Retour à Années Académiques",
+            fg_color=self.colors["border"],
+            hover_color=self.colors["hover"],
+            text_color=self.colors["text_dark"],
+            width=240,
+            height=34,
+            corner_radius=8,
+            command=lambda: self._run_with_loading(self._show_academic_years),
+        ).pack(side="left")
         
         active_year = self.academic_year_service.get_active_year()
         if not active_year:
@@ -5810,20 +5880,30 @@ class AdminDashboard(ctk.CTkFrame):
                 
                 # Variables pour stocker les résultats
                 notification_result = {'result': None}
+
+                def _update_progress_ui(msg, val):
+                    try:
+                        if progress_dialog.winfo_exists():
+                            status_label.configure(text=msg)
+                            progress_bar.set(val)
+                    except Exception:
+                        pass
                 
                 def send_notifications_background():
                     """Envoyer les notifications dans un thread séparé"""
                     try:
+                        def _safe_progress(msg, val):
+                            try:
+                                self.after(0, lambda m=msg, v=val: _update_progress_ui(m, v))
+                            except Exception:
+                                pass
+
                         result = self._notify_students_exam_period_sync(
                             period_name=name,
                             start_date=start_dt,
                             end_date=end_dt,
                             academic_year_id=active_year['academic_year_id'],
-                            progress_callback=lambda msg, val: (
-                                status_label.configure(text=msg),
-                                progress_bar.set(val),
-                                progress_dialog.update()
-                            )
+                            progress_callback=_safe_progress
                         )
                         notification_result['result'] = result
                     except Exception as e:
@@ -5850,6 +5930,7 @@ class AdminDashboard(ctk.CTkFrame):
                                     "Résumé des Notifications",
                                     f"Période: {name}\n\n"
                                     f"✅ Notifiés: {result['notified']}/{result['total']}\n"
+                                    f"🎓 Étudiants éligibles: {result.get('eligible', 0)}\n"
                                     f"📧 Avec code: {result['with_code']}\n"
                                     f"💬 Paiement reçu (sans code): {result.get('paid_no_code',0)}\n"
                                     f"❌ Non payés: {result.get('unpaid',0)}\n"
@@ -5941,7 +6022,7 @@ class AdminDashboard(ctk.CTkFrame):
         
         result = {
             'total': 0, 'notified': 0, 'skipped': 0,
-            'with_code': 0, 'paid_no_code': 0, 'unpaid': 0,
+            'with_code': 0, 'paid_no_code': 0, 'eligible': 0, 'unpaid': 0,
             'messages': ""
         }
         
@@ -5957,7 +6038,7 @@ class AdminDashboard(ctk.CTkFrame):
             result['total'] = len(students_list)
             
             if progress_callback:
-                progress_callback(f"Envoi des notifications... (0/{result['total']})", 0.3)
+                progress_callback(f"Préparation des notifications... (0/{result['total']})", 0.25)
             
             # Préparer les données pour envoi paralléle
             notifs_to_send = []
@@ -5967,9 +6048,16 @@ class AdminDashboard(ctk.CTkFrame):
             unpaid_count = 0
             
             for idx, student in enumerate(students_list):
-                student_id = student.get('student_id')
+                student_id = student.get('student_id') or student.get('id')
                 email = student.get('email', '').strip()
                 phone = student.get('phone_number', '').strip()
+
+                if progress_callback and result['total'] > 0:
+                    prep_prog = (idx + 1) / result['total']
+                    progress_callback(
+                        f"Préparation des notifications... ({idx + 1}/{result['total']})",
+                        0.25 + 0.30 * prep_prog,
+                    )
                 
                 if not email and not phone:
                     skipped_count += 1
@@ -5982,24 +6070,32 @@ class AdminDashboard(ctk.CTkFrame):
                 paid = False
                 
                 # déterminer si l'étudiant a déjà payé le seuil
-                try:
-                    paid = self.finance_service.is_threshold_reached(student_id)
-                except Exception:
-                    paid = False
-                
-                try:
-                    access_code = self.finance_service.get_latest_access_code(student_id)
-                except Exception:
-                    access_code = None
-                
-                if paid and not access_code:
-                    # si l'étudiant est payé mais n'a pas encore de code, générer un code
+                # (priorité à la valeur préchargée, fallback service finance)
+                raw_eligible = student.get('is_eligible')
+                if raw_eligible is not None:
                     try:
-                        # is_full_paid supposé vrai si seuil atteint
-                        self.finance_service._issue_access_code_if_needed(student_id, is_full_paid=True)
+                        if isinstance(raw_eligible, str):
+                            paid = raw_eligible.strip().lower() in {"1", "true", "yes", "oui"}
+                        else:
+                            paid = bool(int(raw_eligible))
+                    except Exception:
+                        paid = bool(raw_eligible)
+                elif student_id is not None:
+                    try:
+                        paid = self.finance_service.is_threshold_reached(student_id)
+                    except Exception:
+                        paid = False
+                
+                if student_id is not None:
+                    try:
                         access_code = self.finance_service.get_latest_access_code(student_id)
                     except Exception:
                         access_code = None
+                else:
+                    access_code = None
+                
+                # NOTE PERF: on n'émet plus de nouveau code ici pour éviter les blocages UI
+                # lors des envois en masse. Si aucun code existe encore, on notifie "code à venir".
                 
                 if access_code:
                     code_type = access_code.get('access_type', 'unknown')
@@ -6054,10 +6150,13 @@ class AdminDashboard(ctk.CTkFrame):
             result['skipped'] = skipped_count
             result['with_code'] = with_code_count
             result['paid_no_code'] = paid_no_code_count
+            result['eligible'] = with_code_count + paid_no_code_count
             result['unpaid'] = unpaid_count
             
             # Envoyer les notifications en parallèle
             notified_count = 0
+            if progress_callback:
+                progress_callback(f"Envoi des notifications... (0/{len(notifs_to_send)})", 0.58)
             # utiliser autant de threads que de notifications pour maximiser la vitesse
             max_workers = min(len(notifs_to_send), 20) or 1
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -6075,7 +6174,7 @@ class AdminDashboard(ctk.CTkFrame):
                     if progress_callback and len(futures) > 0:
                         prog = (i + 1) / len(futures)
                         if prog % 0.05 < 0.01 or i == len(futures) - 1:
-                            progress = 0.3 + 0.6 * prog
+                            progress = 0.58 + 0.40 * prog
                             progress_callback(f"Envoi... ({i + 1}/{len(futures)})", progress)
             
             result['notified'] = notified_count
@@ -7641,7 +7740,7 @@ class AdminDashboard(ctk.CTkFrame):
             headers = ["Code", "Étudiant", "Type", "Université", "Date", "Statut", "Livraison", "Détails"]
             header_widths = [120, 150, 100, 200, 120, 100, 110, 80]
             
-            header_row = ctk.CTkFrame(table_header)
+            header_row = ctk.CTkFrame(table_header, fg_color="transparent")
             header_row.pack(fill="x", padx=10, pady=8)
             
             for header_text, width in zip(headers, header_widths):

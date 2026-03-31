@@ -92,7 +92,34 @@ class LoginScreen(ctk.CTkFrame):
         # Bind resize event pour responsive
         self.bind("<Configure>", self._on_window_resize)
         self.winfo_toplevel().bind("<Configure>", self._on_window_resize, add="+")
+        # Stabilisation initiale: certains widgets ne reportent leur vraie taille
+        # qu'après le premier cycle de rendu.
+        self.after(40, self._stabilize_initial_layout)
+        self.after(180, self._stabilize_initial_layout)
+        self.after(380, self._stabilize_initial_layout)
         logger.info("LoginScreen initialized in %.1f ms", (perf_counter() - init_t0) * 1000)
+
+    def _stabilize_initial_layout(self):
+        """Force un recalcul propre du layout après rendu initial.
+
+        Corrige les cas où la carte login est tronquée au premier affichage
+        et ne se corrige qu'après redimensionnement manuel.
+        """
+        try:
+            if not self.winfo_exists():
+                return
+            self.update_idletasks()
+            top = self.winfo_toplevel()
+            ww = top.winfo_width()
+            wh = top.winfo_height()
+            if ww > 1 and wh > 1:
+                self._last_window_size = (ww, wh)
+                # Forcer une vraie application même si la taille n'a pas changé.
+                self._last_applied_window_size = None
+                self._update_card_size(ww, wh)
+                self._last_applied_window_size = (ww, wh)
+        except Exception as exc:
+            logger.debug(f"Initial login layout stabilization skipped: {exc}")
 
     def _restore_saved_login_state(self, saved_state: dict):
         """Restaure remember-me uniquement (sans auto-login implicite)."""
@@ -809,15 +836,9 @@ class LoginScreen(ctk.CTkFrame):
             if self.compact_login_form and self.content_frame is not None and self.card_outer is not None:
                 try:
                     self.update_idletasks()
-                    # Calculer la vraie fin du formulaire (dernier widget visible)
-                    bottom_y = 0
-                    for child in self.content_frame.winfo_children():
-                        if not child.winfo_ismapped():
-                            continue
-                        bottom_y = max(bottom_y, child.winfo_y() + child.winfo_height())
-
-                    # Hauteur intérieure de la carte (contenu + marge basse minimale)
-                    inner_h = max(180, bottom_y + 8)
+                    # Utiliser la hauteur requise (plus fiable au premier rendu que y/height enfants).
+                    req_h = self.content_frame.winfo_reqheight()
+                    inner_h = max(220, req_h + 6)
                     # +16 pour le padding (pady=8 haut/bas de self.card_inner dans self.card_outer)
                     compact_h = max(200, min(inner_h + 16, available_h))
 

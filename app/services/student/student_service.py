@@ -130,6 +130,7 @@ class StudentService:
                     s.firstname,
                     s.lastname,
                     s.email,
+                    s.phone_number,
                     s.passport_photo_path,
                     s.passport_photo_blob,
                     s.promotion_id,

@@ -1,66 +1,95 @@
-# Configuration Matérielle ESP32 Cam - Version Corrigée
-# Séparation du code matériel pour meilleure organisation
-# Support multiple formats caméra avec fallback automatique
+# ============================================================
+# Matériel ESP32 - Nouvelle Architecture (sans ESP32-CAM, sans Arduino)
+# ============================================================
+# Rôle : clavier matriciel 4x4 + servo moteur + Wi-Fi HTTP
+# La reconnaissance faciale et la capture image sont déléguées :
+#   → au serveur Python (access_server.py)
+#   → qui utilise une caméra IP (RTSP ou HTTP snapshot)
+#
+# SUPPRIMÉ (ancienne architecture) :
+#   - UART vers Arduino (liaison série)
+#   - Module caméra OV2640 / esp32camera
+#   - TensorFlow Lite sur ESP32
+# ============================================================
 
-import machine
+import network
+import urequests
 import time
-from machine import Pin, PWM, UART
-import esp32_camera_config  # Module de configuration caméra
+import json
+from machine import Pin, PWM
+
+# ── Configuration réseau ─────────────────────────────────────
+WIFI_SSID     = "VOTRE_SSID_WIFI"
+WIFI_PASSWORD = "VOTRE_MOT_DE_PASSE_WIFI"
+SERVER_URL    = "http://192.168.1.100:5050"   # IP du serveur Python
+
+# ── GPIO clavier 4×4 ─────────────────────────────────────────
+ROW_PINS = [13, 12, 14, 27]   # Lignes (OUTPUT)
+COL_PINS = [26, 25, 33, 32]   # Colonnes (INPUT PULL-DOWN)
+
+KEYPAD_LAYOUT = [
+    ['1', '2', '3', 'A'],
+    ['4', '5', '6', 'B'],
+    ['7', '8', '9', 'C'],
+    ['*', '0', '#', 'D'],
+]
+
+# ── GPIO servo moteur ─────────────────────────────────────────
+SERVO_PIN       = 18
+SERVO_OPEN_NS   = 2_400_000   # ~180° porte ouverte
+SERVO_CLOSED_NS =   600_000   # ~0°   porte fermée
+
+# ── GPIO LEDs ─────────────────────────────────────────────────
+LED_GREEN_PIN = 2
+LED_RED_PIN   = 4
+
 import logging
-
-# Configuration liaison série avec Arduino
-ARDUINO_BAUDRATE = 9600
-# Sur ESP32-CAM, on utilise les broches UART0 (U0T/U0R) :
-# - U0T (GPIO 1) : TX (Transmission vers Arduino)
-# - U0R (GPIO 3) : RX (Réception depuis Arduino)
-ESP32_TX_PIN = 1  # GPIO 1 (U0T) pour transmission vers Arduino
-ESP32_RX_PIN = 3  # GPIO 3 (U0R) pour réception depuis Arduino
-
 logger = logging.getLogger(__name__)
 
 class ESP32Hardware:
-    """Classe gérant toute la configuration matérielle ESP32"""
+    """
+    Matériel ESP32 standard pour contrôle d'accès.
+    Gère : clavier matriciel 4x4, servo moteur, Wi-Fi, LEDs.
+    La reconnaissance faciale et la caméra sont côté serveur Python.
+    """
 
     def __init__(self):
-        self.uart = None
-        self.camera_manager = None
-        self.face_recognizer = None
+        self.rows        = [Pin(p, Pin.OUT, value=0) for p in ROW_PINS]
+        self.cols        = [Pin(p, Pin.IN,  Pin.PULL_DOWN) for p in COL_PINS]
+        self.servo       = PWM(Pin(SERVO_PIN), freq=50)
+        self.led_green   = Pin(LED_GREEN_PIN, Pin.OUT, value=0)
+        self.led_red     = Pin(LED_RED_PIN,   Pin.OUT, value=0)
+        self.wlan        = network.WLAN(network.STA_IF)
         self.initialized = False
+        self._close_door()
 
-    def initialize_hardware(self):
-        """Initialise tous les composants matériels ESP32"""
+    def initialize_hardware(self) -> bool:
+        """Initialise le matériel ESP32 et connecte au Wi-Fi."""
         try:
-            # Initialisation liaison série avec Arduino (UART0)
-            self.uart = UART(0, baudrate=ARDUINO_BAUDRATE, tx=ESP32_TX_PIN, rx=ESP32_RX_PIN)
-            logger.info("UART ESP32 initialisé")
-
-            # Initialisation caméra avec diagnostic
-            self.camera_manager = esp32_camera_config.camera_manager
-            if not self.camera_manager.initialize_camera():
-                logger.error("Caméra ESP32 non initialisée!")
-                logger.error(f"Erreur: {self.camera_manager.last_error}")
+            self._close_door()
+            if not self.connect_wifi():
                 return False
-            
-            camera_status = self.camera_manager.get_camera_status()
-            logger.info(f"Caméra ESP32 initialisée: Format={camera_status['format']}, Size={camera_status['framesize']}")
-
-            # Initialisation reconnaissance faciale (optionnel - peut être chargé plus tard)
-            try:
-                import face_recognition
-                self.face_recognizer = face_recognition.FaceRecognizer()
-                logger.info("Reconnaissance faciale initialisée")
-            except ImportError:
-                logger.warning("Module face_recognition non disponible - fonctionnalité désactivée")
-                self.face_recognizer = None
-
             self.initialized = True
-            logger.info("Configuration matérielle ESP32 terminée avec succès")
+            logger.info("Matériel ESP32 initialisé avec succès")
             return True
-
         except Exception as e:
             logger.error(f"Erreur initialisation matériel ESP32: {e}")
             self.initialized = False
             return False
+
+    def connect_wifi(self) -> bool:
+        """Connecte l'ESP32 au réseau Wi-Fi."""
+        self.wlan.active(True)
+        if self.wlan.isconnected():
+            return True
+        self.wlan.connect(WIFI_SSID, WIFI_PASSWORD)
+        for _ in range(20):
+            if self.wlan.isconnected():
+                logger.info(f"Wi-Fi connecté: {self.wlan.ifconfig()[0]}")
+                return True
+            time.sleep(1)
+        logger.error("Échec connexion Wi-Fi")
+        return False
 
     def send_to_arduino(self, message):
         """Envoie un message à Arduino via liaison série"""
@@ -123,66 +152,36 @@ class ESP32Hardware:
         return False
 
     def cleanup(self):
-        """Nettoie les ressources matérielles"""
+        """Nettoie les ressources matérielles."""
         try:
-            if self.uart:
-                self.uart.deinit()
+            self._close_door()
+            self.servo.deinit()
             self.initialized = False
             logger.info("Nettoyage matériel ESP32 terminé")
         except Exception as e:
             logger.error(f"Erreur nettoyage: {e}")
 
-    def get_hardware_status(self):
-        """Retourne le statut du matériel"""
-        status = {
-            'uart': self.uart is not None and self.initialized,
-            'initialized': self.initialized,
+    def get_hardware_status(self) -> dict:
+        """Retourne le statut du matériel."""
+        return {
+            "initialized":   self.initialized,
+            "wifi_connected": self.wlan.isconnected(),
+            "wifi_ip":       self.wlan.ifconfig()[0] if self.wlan.isconnected() else None,
+            "server_url":    SERVER_URL,
+            "hardware":      "ESP32 standard (clavier 4x4 + servo + Wi-Fi)",
         }
-        
-        if self.camera_manager:
-            status['camera'] = self.camera_manager.get_camera_status()
-        
-        if self.face_recognizer:
-            status['face_recognizer'] = 'initialized'
-        else:
-            status['face_recognizer'] = 'unavailable'
-        
-        return status
 
-# Instance globale pour accès facile
+# Instance globale
 esp32_hw = ESP32Hardware()
 
-# Fonctions utilitaires pour accès direct
+# Fonctions utilitaires
 def initialize_esp32_hardware():
-    """Fonction utilitaire pour initialisation"""
     return esp32_hw.initialize_hardware()
 
-def send_command_to_arduino(command):
-    """Fonction utilitaire pour envoi commande"""
-    return esp32_hw.send_to_arduino(command)
-
-def receive_command_from_arduino():
-    """Fonction utilitaire pour réception commande"""
-    return esp32_hw.receive_from_arduino()
-
-def capture_camera_image():
-    """Fonction utilitaire pour capture image"""
-    return esp32_hw.capture_image()
-
-def detect_faces_in_image(image):
-    """Fonction utilitaire pour détection visages"""
-    return esp32_hw.detect_faces(image)
-
-def recognize_face_in_image(image, known_faces):
-    """Fonction utilitaire pour reconnaissance visage"""
-    return esp32_hw.recognize_face(image, known_faces)
-
 def cleanup_esp32_hardware():
-    """Fonction utilitaire pour nettoyage"""
     esp32_hw.cleanup()
 
 def get_esp32_hardware_status():
-    """Fonction utilitaire pour obtenir le statut"""
     return esp32_hw.get_hardware_status()
 
 # ============================================================================

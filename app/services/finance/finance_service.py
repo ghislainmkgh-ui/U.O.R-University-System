@@ -521,6 +521,27 @@ class FinanceService:
                 # Valide jusqu'à modification du seuil (pas d'expiration temps)
                 expires_at = None
 
+            # Ne pas régénérer inutilement un code déjà actif du même type.
+            latest = self.get_latest_access_code(student_id)
+            if latest:
+                latest_type = str(latest.get('access_type') or '').strip().lower()
+                latest_expires = latest.get('expires_at')
+
+                if isinstance(latest_expires, str) and latest_expires:
+                    try:
+                        latest_expires = datetime.fromisoformat(latest_expires)
+                    except Exception:
+                        latest_expires = None
+
+                still_valid = (latest_expires is None) or (datetime.now() <= latest_expires)
+                if latest_type == access_type and still_valid:
+                    logger.info(
+                        "Skipping access code regeneration for student %s (type=%s already active)",
+                        student_id,
+                        access_type,
+                    )
+                    return
+
             access_code = self._generate_access_code()
             password_hash = self.auth_service.password_hasher.hash_password(access_code)
 
@@ -637,5 +658,19 @@ class FinanceService:
             logger.error(f"Error notifying threshold change: {e}")
 
     def _generate_access_code(self) -> str:
-        """Génère un mot de passe numérique (6 chiffres)"""
-        return f"{random.randint(0, 999999):06d}"
+        """Génère un mot de passe numérique (6 chiffres) unique dans l'historique."""
+        self._ensure_access_code_history_table()
+        max_attempts = 20
+
+        for _ in range(max_attempts):
+            candidate = f"{random.randint(0, 999999):06d}"
+            exists = self.db.execute_query(
+                "SELECT 1 FROM access_code_history WHERE access_code = %s LIMIT 1",
+                (candidate,),
+            )
+            if not exists:
+                return candidate
+
+        # Fallback robuste (ajoute composante temporelle millisecondes tout en restant 6 chiffres)
+        suffix = int(datetime.now().strftime("%f")) % 1000
+        return f"{random.randint(0, 999):03d}{suffix:03d}"

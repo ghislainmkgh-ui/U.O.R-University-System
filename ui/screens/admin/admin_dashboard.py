@@ -282,6 +282,17 @@ class AdminDashboard(ctk.CTkFrame):
         self._loading_overlay = None
         self._loading_indicator = None
         self._loading_visible = False
+        self._loading_started_at = 0.0
+        self._loading_hide_job = None
+        self._loading_failsafe_job = None
+        self._loading_min_visible_ms = 280
+        self._section_loading_overlay = None
+        self._section_loading_indicator = None
+        self._section_loading_job = None
+        self._section_loading_failsafe_job = None
+        self._migration_dialog_opening = False
+        self._view_switch_in_progress = False
+        self._ui_rebuild_in_progress = False
         self.topbar = None
         self.footer = None
         self._theme_switch_in_progress = False
@@ -677,7 +688,7 @@ class AdminDashboard(ctk.CTkFrame):
     def _refresh_students_layout_for_resize(self):
         """Reconstruit la vue Étudiants après changement de breakpoint responsive"""
         try:
-            if self.current_view == "students":
+            if self.current_view == "students" and not self._view_switch_in_progress and not self._loading_visible:
                 self._show_students()
         finally:
             self._students_layout_refreshing = False
@@ -1033,10 +1044,12 @@ class AdminDashboard(ctk.CTkFrame):
 
     def _toggle_theme(self):
         """Bascule le thème et reconstruit l'UI de manière stable (anti-flicker)."""
-        if self._theme_switch_in_progress:
+        if self._theme_switch_in_progress or self._ui_rebuild_in_progress:
             return
 
         self._theme_switch_in_progress = True
+        self._ui_rebuild_in_progress = True
+        self._view_switch_in_progress = True
         if hasattr(self, "theme_btn") and self.theme_btn:
             try:
                 self.theme_btn.configure(state="disabled")
@@ -1048,6 +1061,7 @@ class AdminDashboard(ctk.CTkFrame):
         self._persist_ui_context(theme=new_theme, view=self.current_view)
         self.colors = self._get_color_palette()
         ctk.set_appearance_mode("Dark" if new_theme == "dark" else "Light")
+        self._show_loading_overlay("Application du thème...")
         self.after_idle(self._recreate_ui)
 
     def _recreate_ui(self):
@@ -1064,6 +1078,8 @@ class AdminDashboard(ctk.CTkFrame):
             self._create_ui()
         finally:
             self._theme_switch_in_progress = False
+            self._ui_rebuild_in_progress = False
+            self._view_switch_in_progress = False
 
     def _render_current_view(self):
         """Réaffiche la vue en cours"""
@@ -1102,18 +1118,20 @@ class AdminDashboard(ctk.CTkFrame):
                     self.student_service.get_all_students_with_finance,
                     ttl_seconds=45.0,
                 )
-                self._update_students_stats()
-                self._render_students_navigation()
+                self._refresh_students_navigation_with_loading("Actualisation après paiement...")
                 return
             except Exception as exc:
                 logger.debug(f"Light students refresh failed after payment: {exc}")
 
         if self.current_view == "finance":
-            self._show_finance(getattr(self, "_finance_filter", "all"))
+            self._run_with_loading(
+                lambda: self._show_finance(getattr(self, "_finance_filter", "all")),
+                "Actualisation des finances...",
+            )
             return
 
         # Fallback sûr pour les autres vues.
-        self._render_current_view()
+        self._run_with_loading(self._render_current_view, "Actualisation de la page...")
 
     def _ensure_loading_overlay(self):
         """Prépare un overlay de chargement pour masquer les rechargements visibles."""
@@ -1137,11 +1155,26 @@ class AdminDashboard(ctk.CTkFrame):
 
     def _show_loading_overlay(self, text: str = "Chargement..."):
         if self._loading_visible:
+            try:
+                if self._loading_indicator:
+                    self._loading_indicator.set_status(self.translator.translate_literal(text))
+            except Exception:
+                pass
             return
         self._ensure_loading_overlay()
         if not self._loading_overlay:
             return
         self._loading_visible = True
+        self._loading_started_at = time.monotonic()
+
+        # Sécurité anti-écran gris bloqué
+        try:
+            if self._loading_failsafe_job:
+                self.after_cancel(self._loading_failsafe_job)
+        except Exception:
+            pass
+        self._loading_failsafe_job = self.after(6000, self._force_reset_loading_state)
+
         display_text = self.translator.translate_literal(text)
         try:
             if self._loading_indicator:
@@ -1157,7 +1190,27 @@ class AdminDashboard(ctk.CTkFrame):
     def _hide_loading_overlay(self):
         if not self._loading_overlay:
             return
+
+        # Evite les flashs visuels: le loader reste visible un minimum
+        elapsed_ms = int((time.monotonic() - (self._loading_started_at or 0.0)) * 1000)
+        remaining_ms = self._loading_min_visible_ms - elapsed_ms
+        if remaining_ms > 0:
+            try:
+                if self._loading_hide_job:
+                    self.after_cancel(self._loading_hide_job)
+            except Exception:
+                pass
+            self._loading_hide_job = self.after(remaining_ms, self._hide_loading_overlay)
+            return
+
+        self._loading_hide_job = None
         self._loading_visible = False
+        try:
+            if self._loading_failsafe_job:
+                self.after_cancel(self._loading_failsafe_job)
+        except Exception:
+            pass
+        self._loading_failsafe_job = None
         try:
             if self._loading_indicator:
                 self._loading_indicator.stop()
@@ -1168,22 +1221,137 @@ class AdminDashboard(ctk.CTkFrame):
         except Exception:
             pass
 
+    def _force_reset_loading_state(self):
+        """Débloque l'interface si un chargement reste bloqué trop longtemps."""
+        self._loading_failsafe_job = None
+        self._loading_visible = False
+        self._view_switch_in_progress = False
+        self._loading_hide_job = None
+        try:
+            if self._loading_indicator:
+                self._loading_indicator.stop()
+        except Exception:
+            pass
+        try:
+            if self._loading_overlay:
+                self._loading_overlay.place_forget()
+        except Exception:
+            pass
+
     def _run_with_loading(self, action, text: str = "Chargement..."):
         """Navigation fluide : affiche l'overlay, laisse Tkinter le peindre, puis exécute l'action.
 
         En différant l'exécution via after(), l'overlay est visible AVANT que le
         fil principal ne soit occupé à construire les widgets → feedback immédiat.
         """
+        if self._view_switch_in_progress:
+            return
+
+        self._view_switch_in_progress = True
         self._show_loading_overlay(text)
 
         def _execute_and_hide():
             try:
                 action()
+            except Exception as exc:
+                logger.error(f"View transition error: {exc}")
             finally:
                 self._hide_loading_overlay()
+                self._view_switch_in_progress = False
 
-        # 20 ms suffisent pour que Tkinter peigne l'overlay avant de bloquer
-        self.after(20, _execute_and_hide)
+        # 24 ms: 1 frame confortable pour peindre l'overlay avant le rendu
+        self.after(24, _execute_and_hide)
+
+    def _show_section_loading(self, target_widget, text: str = "Chargement..."):
+        """Affiche un spinner local sur une section (carte/table) sans bloquer toute la page."""
+        try:
+            self._hide_section_loading()
+            if not target_widget or not target_widget.winfo_exists():
+                return
+
+            overlay = ctk.CTkFrame(target_widget, fg_color=self.colors["main_bg"])
+            overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+            overlay.lift()
+
+            card = ctk.CTkFrame(overlay, fg_color=self.colors["card_bg"], corner_radius=12)
+            card.place(relx=0.5, rely=0.5, anchor="center")
+
+            indicator = LoadingIndicator(
+                card,
+                text=self.translator.translate_literal(text),
+                color=self.colors.get("primary", "#3b82f6"),
+            )
+            indicator.pack(padx=18, pady=16)
+            indicator.start()
+
+            self._section_loading_overlay = overlay
+            self._section_loading_indicator = indicator
+
+            # failsafe local anti-blocage
+            self._section_loading_failsafe_job = self.after(5000, self._hide_section_loading)
+        except Exception:
+            self._hide_section_loading()
+
+    def _hide_section_loading(self):
+        """Cache le spinner local de section."""
+        try:
+            if self._section_loading_failsafe_job:
+                self.after_cancel(self._section_loading_failsafe_job)
+        except Exception:
+            pass
+        self._section_loading_failsafe_job = None
+
+        try:
+            if self._section_loading_job:
+                self.after_cancel(self._section_loading_job)
+        except Exception:
+            pass
+        self._section_loading_job = None
+
+        try:
+            if self._section_loading_indicator:
+                self._section_loading_indicator.stop()
+        except Exception:
+            pass
+        self._section_loading_indicator = None
+
+        try:
+            if self._section_loading_overlay:
+                self._section_loading_overlay.place_forget()
+                self._section_loading_overlay.destroy()
+        except Exception:
+            pass
+        self._section_loading_overlay = None
+
+    def _run_with_section_loading(self, target_widget, action, text: str = "Chargement..."):
+        """Exécute une action avec spinner local si possible, sinon fallback global."""
+        try:
+            if target_widget and target_widget.winfo_exists():
+                self._show_section_loading(target_widget, text)
+
+                def _run_local():
+                    try:
+                        action()
+                    finally:
+                        self._hide_section_loading()
+
+                self._section_loading_job = self.after(20, _run_local)
+                return
+        except Exception:
+            pass
+
+        # Fallback sûr
+        self._run_with_loading(action, text)
+
+    def _refresh_students_navigation_with_loading(self, text: str = "Actualisation des étudiants..."):
+        """Rafraîchit la navigation Étudiants avec un feedback spinner cohérent."""
+
+        def _action():
+            self._update_students_stats()
+            self._render_students_navigation()
+
+        target = getattr(self, "students_main_card", None)
+        self._run_with_section_loading(target, _action, text)
     
     def _create_ui(self):
         """Crée l'interface moderne du dashboard"""
@@ -1293,20 +1461,20 @@ class AdminDashboard(ctk.CTkFrame):
         
         # Navigation
         nav_items = [
-            ("📊", "dashboard", self._t("dashboard", "Dashboard"), lambda: self._run_with_loading(self._show_dashboard)),
-            ("👥", "students", self._t("students", "Étudiants"), lambda: self._run_with_loading(self._show_students)),
-            ("🧾", "academic_data", self._t("academic_data", "Données Académiques"), lambda: self._run_with_loading(self._show_student_academic_data)),
-            ("💰", "finance", self._t("finance", "Finances"), lambda: self._run_with_loading(self._show_finance)),
-            ("📚", "academic_years", self._t("academic_years", "Années Acad."), lambda: self._run_with_loading(self._show_academic_years)),
-            ("🔄", "transfers", self._t("transfers", "Transferts"), lambda: self._run_with_loading(self._show_transfers)),
-            ("📋", "access_logs", self._t("access_logs", "Logs d'Accès"), lambda: self._run_with_loading(self._show_access_logs)),
-            ("📈", "reports", self._t("reports", "Rapports"), lambda: self._run_with_loading(self._show_reports)),
+            ("📊", "dashboard", self._t("dashboard", "Dashboard"), lambda: self._run_with_loading(self._show_dashboard, "Préparation du dashboard...")),
+            ("👥", "students", self._t("students", "Étudiants"), lambda: self._run_with_loading(self._show_students, "Chargement des étudiants...")),
+            ("🧾", "academic_data", self._t("academic_data", "Données Académiques"), lambda: self._run_with_loading(self._show_student_academic_data, "Chargement des données académiques...")),
+            ("💰", "finance", self._t("finance", "Finances"), lambda: self._run_with_loading(self._show_finance, "Chargement des finances...")),
+            ("📚", "academic_years", self._t("academic_years", "Années Acad."), lambda: self._run_with_loading(self._show_academic_years, "Chargement des années académiques...")),
+            ("🔄", "transfers", self._t("transfers", "Transferts"), lambda: self._run_with_loading(self._show_transfers, "Chargement des transferts...")),
+            ("📋", "access_logs", self._t("access_logs", "Logs d'Accès"), lambda: self._run_with_loading(self._show_access_logs, "Chargement des journaux d'accès...")),
+            ("📈", "reports", self._t("reports", "Rapports"), lambda: self._run_with_loading(self._show_reports, "Génération des rapports...")),
         ]
 
         if self.is_super_admin:
             nav_items.insert(
                 2,
-                ("✅", "access_requests", self._t("access_requests", "Demandes d'accès"), lambda: self._run_with_loading(self._show_access_requests)),
+                ("✅", "access_requests", self._t("access_requests", "Demandes d'accès"), lambda: self._run_with_loading(self._show_access_requests, "Chargement des demandes d'accès...")),
             )
 
         nav_items = [item for item in nav_items if self._can_access_view(item[1])]
@@ -1448,6 +1616,8 @@ class AdminDashboard(ctk.CTkFrame):
         
         # Afficher la vue active
         self._render_current_view()
+        # Sécurité post-rendu: évite un overlay résiduel lors du premier affichage
+        self.after(300, self._force_reset_loading_state)
         self._translate_all_windows()
         self._start_translation_watchdog()
         # Appliquer le mode responsive automatique selon la largeur réelle
@@ -1670,8 +1840,6 @@ class AdminDashboard(ctk.CTkFrame):
         loading.start()
 
         self._animate_window_open(dialog)
-
-        self._animate_window_open(dialog)
         return dialog, loading
 
     def _update_sidebar_layout(self):
@@ -1705,6 +1873,9 @@ class AdminDashboard(ctk.CTkFrame):
     
     def _toggle_sidebar_expand(self):
         """Bascule entre le mode compact et le mode complet"""
+        if self._view_switch_in_progress or self._ui_rebuild_in_progress:
+            return
+
         # Déterminer le nouveau mode
         if self.sidebar_mode == "compact":
             new_mode = "full"
@@ -1905,6 +2076,8 @@ class AdminDashboard(ctk.CTkFrame):
         """Rafraîchit la vue courante après changement de mode tableau, avec debounce."""
         self._table_mode_refresh_job = None
         try:
+            if self._view_switch_in_progress or self._loading_visible:
+                return
             self._render_current_view()
         except Exception as e:
             logger.debug(f"Table mode refresh error: {e}")
@@ -2519,7 +2692,7 @@ class AdminDashboard(ctk.CTkFrame):
             bar_header, text="VOIR RAPPORT  \u203a", width=115, height=26,
             fg_color="transparent", hover_color=C["hover"],
             text_color=C["primary"], font=ctk.CTkFont(size=10, weight="bold"),
-            command=self._show_students
+            command=lambda: self._run_with_loading(self._show_students, "Chargement des étudiants...")
         ).pack(side="right")
         ctk.CTkLabel(
             bar_header, text="Comparaison des indicateurs cl\u00e9s",
@@ -2609,7 +2782,7 @@ class AdminDashboard(ctk.CTkFrame):
             donut_header, text="VOIR RAPPORT  \u203a", width=115, height=26,
             fg_color="transparent", hover_color=C["hover"],
             text_color=C["primary"], font=ctk.CTkFont(size=10, weight="bold"),
-            command=self._show_students
+            command=lambda: self._run_with_loading(self._show_students, "Chargement des étudiants...")
         ).pack(side="right")
         ctk.CTkLabel(
             donut_header, text="Sources acad\u00e9miques",
@@ -2702,7 +2875,7 @@ class AdminDashboard(ctk.CTkFrame):
             lb_left, text="Voir les logs \u2192", width=115, height=28,
             fg_color=C["primary"], hover_color="#2563eb",
             text_color="#fff", font=ctk.CTkFont(size=10, weight="bold"),
-            corner_radius=6, command=self._show_access_logs
+            corner_radius=6, command=lambda: self._run_with_loading(self._show_access_logs, "Chargement des logs d'accès...")
         ).pack(anchor="w")
         ic_box = ctk.CTkFrame(
             lb_inner, fg_color="#EDE9FE" if not is_dark else "#2D1B6B",
@@ -2743,7 +2916,7 @@ class AdminDashboard(ctk.CTkFrame):
             rb_left, text="Voir finances \u2192", width=115, height=28,
             fg_color="transparent", hover_color=C["hover"],
             text_color=C["primary"], font=ctk.CTkFont(size=10, weight="bold"),
-            corner_radius=6, command=self._show_finance
+            corner_radius=6, command=lambda: self._run_with_loading(self._show_finance, "Chargement des finances...")
         ).pack(anchor="w", pady=(4, 0))
         ic_box2 = ctk.CTkFrame(
             rb_inner, fg_color="#CCFBF1" if not is_dark else "#003D35",
@@ -2987,8 +3160,7 @@ class AdminDashboard(ctk.CTkFrame):
         self.nav_state['selected_department'] = None
         self.nav_state['selected_promotion'] = None
 
-        self._update_students_stats()
-        self._render_students_navigation()
+        self._refresh_students_navigation_with_loading("Filtrage par année académique...")
     
     def _update_breadcrumb(self):
         """Met à jour le fil d'Ariane"""
@@ -3037,7 +3209,7 @@ class AdminDashboard(ctk.CTkFrame):
             self.nav_state['selected_department'] = None
             self.nav_state['selected_promotion'] = None
         
-        self._render_students_navigation()
+        self._refresh_students_navigation_with_loading("Chargement de la navigation...")
     
     def _show_faculties_view(self):
         """Affiche les cartes des facultés"""
@@ -3548,13 +3720,13 @@ class AdminDashboard(ctk.CTkFrame):
         """Sélectionne une faculté et passe aux départements"""
         self.nav_state['level'] = 'department'
         self.nav_state['selected_faculty'] = faculty_info
-        self._render_students_navigation()
+        self._refresh_students_navigation_with_loading("Chargement des départements...")
     
     def _select_department(self, dept_info):
         """Sélectionne un département et passe aux promotions"""
         self.nav_state['level'] = 'promotion'
         self.nav_state['selected_department'] = dept_info
-        self._render_students_navigation()
+        self._refresh_students_navigation_with_loading("Chargement des promotions...")
     
 
     def _open_add_student_dialog(self):
@@ -3677,9 +3849,88 @@ class AdminDashboard(ctk.CTkFrame):
         year_entry.bind("<KeyRelease>", update_threshold_info)
         year_entry.bind("<FocusOut>", update_threshold_info)
 
-        faculty_entry = add_labeled_entry(academic_frame, "Faculté *", "Informatique / INF", row=3, col=0)
-        department_entry = add_labeled_entry(academic_frame, "Département *", "Génie Informatique", row=3, col=1)
-        promotion_entry = add_labeled_entry(academic_frame, "Promotion *", "L3-LMD/G.I", row=5, col=0, col_span=2)
+        # --- Faculté (combobox + saisie libre) ---
+        faculties = self.student_service.get_faculties() or []
+        faculty_names = [f"{f['name']} / {f['code']}" if f.get('code') else f['name'] for f in faculties]
+        faculty_id_map = {}
+        for f in faculties:
+            key = f"{f['name']} / {f['code']}" if f.get('code') else f['name']
+            faculty_id_map[key] = f['id']
+
+        ctk.CTkLabel(academic_frame, text="Faculté *", font=self._font(10), text_color=self.colors["text_light"]).grid(
+            row=3, column=0, sticky="w", padx=4, pady=(5, 1))
+        faculty_entry = ctk.CTkComboBox(
+            academic_frame, values=faculty_names if faculty_names else [""],
+            fg_color=self.colors["main_bg"], border_color=self.colors["border"],
+            border_width=1, corner_radius=6, height=28, button_color=self.colors["primary"]
+        )
+        faculty_entry.grid(row=4, column=0, sticky="ew", padx=4, pady=(0, 4))
+        if faculty_names:
+            faculty_entry.set(faculty_names[0])
+        else:
+            faculty_entry.set("")
+
+        # --- Département (cascade sur faculté) ---
+        ctk.CTkLabel(academic_frame, text="Département *", font=self._font(10), text_color=self.colors["text_light"]).grid(
+            row=3, column=1, sticky="w", padx=4, pady=(5, 1))
+        department_entry = ctk.CTkComboBox(
+            academic_frame, values=[""],
+            fg_color=self.colors["main_bg"], border_color=self.colors["border"],
+            border_width=1, corner_radius=6, height=28, button_color=self.colors["primary"]
+        )
+        department_entry.grid(row=4, column=1, sticky="ew", padx=4, pady=(0, 4))
+        department_entry.set("")
+        dept_id_map = {}
+
+        # --- Promotion (cascade sur département) ---
+        ctk.CTkLabel(academic_frame, text="Promotion *", font=self._font(10), text_color=self.colors["text_light"]).grid(
+            row=5, column=0, sticky="w", padx=4, pady=(5, 1), columnspan=2)
+        promotion_entry = ctk.CTkComboBox(
+            academic_frame, values=[""],
+            fg_color=self.colors["main_bg"], border_color=self.colors["border"],
+            border_width=1, corner_radius=6, height=28, button_color=self.colors["primary"]
+        )
+        promotion_entry.grid(row=6, column=0, columnspan=2, sticky="ew", padx=4, pady=(0, 4))
+        promotion_entry.set("")
+        promo_id_map = {}
+
+        def _reload_departments(*args):
+            fac_val = faculty_entry.get().strip()
+            fac_id = faculty_id_map.get(fac_val)
+            if fac_id:
+                depts = self.student_service.get_departments_by_faculty(fac_id) or []
+            else:
+                depts = []
+            dept_id_map.clear()
+            dept_names = []
+            for d in depts:
+                key = f"{d['name']} / {d['code']}" if d.get('code') else d['name']
+                dept_names.append(key)
+                dept_id_map[key] = d['id']
+            department_entry.configure(values=dept_names if dept_names else [""])
+            department_entry.set(dept_names[0] if dept_names else "")
+            _reload_promotions()
+
+        def _reload_promotions(*args):
+            dept_val = department_entry.get().strip()
+            dept_id = dept_id_map.get(dept_val)
+            if dept_id:
+                promos = self.student_service.get_promotions_by_department(dept_id) or []
+            else:
+                promos = []
+            promo_id_map.clear()
+            promo_names = []
+            for p in promos:
+                key = f"{p['name']}" + (f" ({p['year']})" if p.get('year') else "")
+                promo_names.append(key)
+                promo_id_map[key] = p['id']
+            promotion_entry.configure(values=promo_names if promo_names else [""])
+            promotion_entry.set(promo_names[0] if promo_names else "")
+
+        faculty_entry.configure(command=_reload_departments)
+        department_entry.configure(command=_reload_promotions)
+        # Charger les départements de la première faculté
+        _reload_departments()
 
         # === SECTION: PHOTO ===
         section_photo = ctk.CTkFrame(form_scroll, fg_color=self.colors["card_bg"], corner_radius=10)
@@ -3913,124 +4164,146 @@ class AdminDashboard(ctk.CTkFrame):
                 show_form_errors(errors, first_error_field)
                 return
 
-            faculty_matches = self.student_service.find_faculty_by_input(faculty_label)
-            if not faculty_matches:
-                faculty_id = self.student_service.create_faculty(faculty_label)
+            # --- Résolution faculté/département/promotion (maps ComboBox ou BD) ---
+            faculty_id = faculty_id_map.get(faculty_label)
+            if not faculty_id:
+                fm = self.student_service.find_faculty_by_input(faculty_label)
+                faculty_id = fm[0]["id"] if fm else self.student_service.create_faculty(faculty_label)
                 if not faculty_id:
                     add_error("faculty", f"Impossible de créer la faculté '{faculty_label}'.")
                     show_form_errors(errors, first_error_field)
                     return
-            else:
-                faculty_id = faculty_matches[0]["id"]
 
-            department_matches = self.student_service.find_department_by_input(department_label, faculty_id)
-            if not department_matches:
-                department_id = self.student_service.create_department(department_label, faculty_id)
-                if not department_id:
+            dept_id = dept_id_map.get(department_label)
+            if not dept_id:
+                dm = self.student_service.find_department_by_input(department_label, faculty_id)
+                dept_id = dm[0]["id"] if dm else self.student_service.create_department(department_label, faculty_id)
+                if not dept_id:
                     add_error("department", f"Impossible de créer le département '{department_label}'.")
                     show_form_errors(errors, first_error_field)
                     return
-            else:
-                department_id = department_matches[0]["id"]
 
-            promotion_matches = self.student_service.find_promotion_by_input(promotion_label, department_id)
-            if not promotion_matches:
-                promotion_id = self.student_service.create_promotion(promotion_label, department_id)
-                if not promotion_id:
+            promo_id = promo_id_map.get(promotion_label)
+            if not promo_id:
+                pm = self.student_service.find_promotion_by_input(promotion_label, dept_id)
+                promo_id = pm[0]["id"] if pm else self.student_service.create_promotion(promotion_label, dept_id)
+                if not promo_id:
                     add_error("promotion", f"Impossible de créer la promotion '{promotion_label}'.")
                     show_form_errors(errors, first_error_field)
                     return
-            else:
-                promotion_id = promotion_matches[0]["id"]
 
             year_data = next((y for y in years if y.get("academic_year_id") == selected_year_id), None)
-            threshold_required = None
-            final_fee_value = None
-
-            if year_data:
-                threshold_required = Decimal(str(year_data.get("threshold_amount", 0)))
-                final_fee_value = Decimal(str(year_data.get("final_fee", threshold_required)))
-            else:
+            if not year_data:
                 ErrorManager.show_error("database_query", f"Failed to fetch academic year data for year_id: {selected_year_id}", dialog)
                 return
 
-            encoding = None
-            face_service = self._get_face_service()
-            if face_service.is_available():
+            threshold_required = Decimal(str(year_data.get("threshold_amount", 0)))
+            final_fee_value = Decimal(str(year_data.get("final_fee", threshold_required)))
+
+            # --- Désactiver le bouton et lancer le travail lourd en arrière-plan ---
+            save_btn.configure(state="disabled", text="⏳ Enregistrement...")
+
+            def _do_heavy():
+                result = {"ok": False, "error": None, "field": None}
                 try:
-                    encoding = face_service.register_face(photo_path, 1)
+                    face_service = self._get_face_service()
+                    encoding = None
+                    if face_service.is_available():
+                        try:
+                            encoding = face_service.register_face(photo_path, 1)
+                        except Exception as e:
+                            result["error"] = f"Échec de l'analyse faciale: {e}"
+                            result["field"] = "photo"
+                            return
+                        if encoding is None:
+                            result["error"] = "Aucun visage détecté (ou plusieurs visages). Utilisez une photo passeport claire."
+                            result["field"] = "photo"
+                            return
+                        quality_ok, quality_msg = face_service.validate_passport_photo(photo_path)
+                        if not quality_ok:
+                            result["error"] = f"Qualité photo insuffisante: {quality_msg}"
+                            result["field"] = "photo"
+                            return
+                    else:
+                        result["error"] = "Reconnaissance faciale indisponible sur ce poste (bibliothèque face_recognition requise)."
+                        result["field"] = "photo"
+                        return
+
+                    storage_dir = os.path.join(os.getcwd(), "storage", "student_photos")
+                    os.makedirs(storage_dir, exist_ok=True)
+                    ext = os.path.splitext(photo_path)[1].lower()
+                    stored_photo_name = f"{student_number}{ext}"
+                    stored_photo_path = os.path.join(storage_dir, stored_photo_name)
+                    try:
+                        shutil.copy2(photo_path, stored_photo_path)
+                        with open(stored_photo_path, "rb") as f:
+                            photo_blob = f.read()
+                    except Exception as e:
+                        result["error"] = f"Impossible d'enregistrer la photo: {e}"
+                        result["field"] = "photo"
+                        return
+
+                    face_bytes = encoding.tobytes() if encoding is not None else None
+                    student = Student(
+                        student_number=student_number, firstname=firstname, lastname=lastname,
+                        email=email, phone_number=phone_number, promotion_id=promo_id,
+                        passport_photo_path=stored_photo_path, passport_photo_blob=photo_blob,
+                        academic_year_id=selected_year_id
+                    )
+
+                    student_id = self.auth_service.register_student_with_face(student, None, face_bytes)
+                    if not student_id:
+                        raw_error = self.auth_service.get_last_error()
+                        user_error, field_key = parse_registration_error(raw_error)
+                        result["error"] = user_error
+                        result["field"] = field_key
+                        return
+
+                    finance_ok = self.finance_service.create_finance_profile(student_id, threshold_required, selected_year_id)
+                    if not finance_ok:
+                        logger.warning(f"Finance profile not created for student {student_id}")
+
+                    def _send_welcome_notification_async():
+                        try:
+                            self.notification_service.send_welcome_notification(
+                                student_email=email,
+                                student_phone=phone_number,
+                                student_name=f"{firstname} {lastname}",
+                                student_number=student_number,
+                                threshold_required=float(threshold_required),
+                                final_fee=float(final_fee_value),
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to send welcome notification: {e}")
+
+                    # Ne pas bloquer la confirmation UI sur les appels réseau (email/WhatsApp)
+                    threading.Thread(target=_send_welcome_notification_async, daemon=True).start()
+
+                    result["ok"] = True
                 except Exception as e:
-                    add_error("photo", f"Échec de l'analyse faciale: {str(e)}")
-                    show_form_errors(errors, first_error_field)
-                    return
+                    logger.error(f"save_student background error: {e}")
+                    result["error"] = f"Erreur inattendue: {e}"
+                finally:
+                    dialog.after(0, lambda: _on_done(result))
 
-                if encoding is None:
-                    add_error("photo", "Aucun visage détecté (ou plusieurs visages). Utilisez une photo passeport claire.")
-                    show_form_errors(errors, first_error_field)
-                    return
+            def _on_done(result):
+                save_btn.configure(state="normal", text="✓ Valider")
+                if result["ok"]:
+                    ErrorManager.show_success("Succès", "Étudiant enregistré avec succès.", dialog)
+                    dialog.destroy()
+                    self._invalidate_view_cache(
+                        "dashboard_snapshot", "students_all_with_finance",
+                        "academic_years", "finance_snapshot",
+                    )
+                    self._schedule_heavy_views_prefetch(delay_ms=250)
+                    self._run_with_loading(self._show_students, "Actualisation des étudiants...")
+                else:
+                    if result.get("field"):
+                        mark_field_error(result["field"])
+                    show_form_errors([result["error"] or "Erreur inconnue"], result.get("field"))
 
-                quality_ok, quality_msg = face_service.validate_passport_photo(photo_path)
-                if not quality_ok:
-                    add_error("photo", f"Qualité photo insuffisante: {quality_msg}")
-                    show_form_errors(errors, first_error_field)
-                    return
-            else:
-                add_error(
-                    "photo",
-                    "Reconnaissance faciale indisponible sur ce poste. Installation requise avant d'inscrire un étudiant (bibliothèque face_recognition).",
-                )
-                show_form_errors(errors, first_error_field)
-                return
-
-            storage_dir = os.path.join(os.getcwd(), "storage", "student_photos")
-            os.makedirs(storage_dir, exist_ok=True)
-            ext = os.path.splitext(photo_path)[1].lower()
-            stored_photo_name = f"{student_number}{ext}"
-            stored_photo_path = os.path.join(storage_dir, stored_photo_name)
-            try:
-                shutil.copy2(photo_path, stored_photo_path)
-                with open(stored_photo_path, "rb") as f:
-                    photo_blob = f.read()
-            except Exception as e:
-                add_error("photo", f"Impossible d'enregistrer la photo: {str(e)}")
-                show_form_errors(errors, first_error_field)
-                return
-
-            face_bytes = encoding.tobytes() if encoding is not None else None
-            student = Student(
-                student_number=student_number, firstname=firstname, lastname=lastname, email=email, phone_number=phone_number, promotion_id=promotion_id, passport_photo_path=stored_photo_path, passport_photo_blob=photo_blob, academic_year_id=selected_year_id
-            )
-
-            student_id = self.auth_service.register_student_with_face(student, None, face_bytes)
-            if not student_id:
-                raw_error = self.auth_service.get_last_error()
-                user_error, field_key = parse_registration_error(raw_error)
-                if field_key:
-                    mark_field_error(field_key)
-                show_form_errors([user_error], field_key)
-                return
-
-            finance_ok = self.finance_service.create_finance_profile(student_id, threshold_required, selected_year_id)
-            if not finance_ok:
-                logger.warning(f"Finance profile not created for student {student_id}")
-
-            try:
-                self.notification_service.send_welcome_notification(
-                    student_email=email, student_phone=phone_number, student_name=f"{firstname} {lastname}", student_number=student_number, threshold_required=float(threshold_required) if threshold_required else 0.0, final_fee=float(final_fee_value) if final_fee_value else 0.0
-                )
-            except Exception as e:
-                logger.warning(f"Failed to send welcome notification: {e}")
-
-            ErrorManager.show_success("Succès", "Étudiant enregistré avec succès.", dialog)
-            dialog.destroy()
-            self._invalidate_view_cache(
-                "dashboard_snapshot",
-                "students_all_with_finance",
-                "academic_years",
-                "finance_snapshot",
-            )
-            self._schedule_heavy_views_prefetch(delay_ms=250)
-            self._show_students()
+            import threading
+            threading.Thread(target=_do_heavy, daemon=True).start()
 
         cancel_btn = ctk.CTkButton(
             button_frame, text="Annuler", fg_color=self.colors["border"], text_color=self.colors["text_dark"], hover_color=self.colors["hover"], height=32, corner_radius=8, command=dialog.destroy
@@ -4268,7 +4541,7 @@ class AdminDashboard(ctk.CTkFrame):
                     "finance_snapshot",
                 )
                 self._schedule_heavy_views_prefetch(delay_ms=250)
-                self._show_students()
+                self._run_with_loading(self._show_students, "Actualisation des étudiants...")
             else:
                 ErrorManager.show_error("database_query", f"Failed to update student {student_id}", dialog)
 
@@ -4727,18 +5000,39 @@ class AdminDashboard(ctk.CTkFrame):
             
             # Rendre la carte cliquable avec le filtre approprié
             kpi_card.configure(cursor="hand2")
-            kpi_card.bind("<Button-1>", lambda e, cat=category: self._show_finance(cat))
+            kpi_card.bind(
+                "<Button-1>",
+                lambda e, cat=category: self._run_with_section_loading(
+                    self.content_frame,
+                    lambda: self._show_finance(cat),
+                    "Actualisation des finances...",
+                ),
+            )
             
             value_font_size = 14 if is_tiny_finance else (16 if is_small_screen else 20)
             label_font_size = 8 if is_small_screen else 10
             
             value_label = ctk.CTkLabel(kpi_card, text=value, font=ctk.CTkFont(size=value_font_size, weight="bold"), text_color=self.colors["text_white"])
             value_label.pack(expand=True)
-            value_label.bind("<Button-1>", lambda e, cat=category: self._show_finance(cat))
+            value_label.bind(
+                "<Button-1>",
+                lambda e, cat=category: self._run_with_section_loading(
+                    self.content_frame,
+                    lambda: self._show_finance(cat),
+                    "Actualisation des finances...",
+                ),
+            )
             
             label_widget = ctk.CTkLabel(kpi_card, text=label, font=ctk.CTkFont(size=label_font_size), text_color=self.colors["text_white"])
             label_widget.pack(pady=(0, 8 if is_tiny_finance else 10))
-            label_widget.bind("<Button-1>", lambda e, cat=category: self._show_finance(cat))
+            label_widget.bind(
+                "<Button-1>",
+                lambda e, cat=category: self._run_with_section_loading(
+                    self.content_frame,
+                    lambda: self._show_finance(cat),
+                    "Actualisation des finances...",
+                ),
+            )
         
         # === TABLEAU PAIEMENTS ===
         table_card = self._create_card(self.content_frame)
@@ -5384,6 +5678,19 @@ class AdminDashboard(ctk.CTkFrame):
             command=lambda: self._run_with_loading(self._show_exam_periods),
         ).pack(side="right")
 
+        if self.is_super_admin:
+            ctk.CTkButton(
+                filter_row,
+                text="🔁 Bascule étudiants (année)",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color=self.colors["warning"],
+                hover_color="#d97706",
+                text_color=self.colors["text_white"],
+                height=32,
+                corner_radius=8,
+                command=self._safe_open_bulk_academic_year_migration_dialog,
+            ).pack(side="right", padx=(0, 8))
+
         promo_headers = ["Faculté", "Promotion", "Département", "Année", "Frais ($)", "Seuil ($)", "Action"]
         layout = self._get_table_layout("academic_promos", len(promo_headers))
         promo_weights = layout["weights"]
@@ -5587,6 +5894,343 @@ class AdminDashboard(ctk.CTkFrame):
             fg_color=self.colors["primary"], hover_color=self.colors["info"], text_color=self.colors["text_white"],
             height=45, corner_radius=8, command=lambda: self._run_with_loading(self._show_exam_periods)
         ).pack(fill="x", expand=True)
+
+        if self.is_super_admin:
+            try:
+                self._render_academic_year_migration_audit_card()
+            except Exception as audit_render_err:
+                logger.warning(f"Failed to render audit card: {audit_render_err}")
+
+    def _render_academic_year_migration_audit_card(self):
+        """Affiche un historique compact des bascules annuelles journalisées."""
+        audit_card = self._create_card(self.content_frame)
+        audit_card.pack(fill="x", expand=False, pady=(8, 0))
+
+        ctk.CTkLabel(
+            audit_card,
+            text="🧾 Journal d'audit — bascules annuelles",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color=self.colors["text_dark"],
+        ).pack(anchor="w", padx=25, pady=(16, 6))
+
+        ctk.CTkLabel(
+            audit_card,
+            text="Historique récent des migrations d'étudiants entre années académiques.",
+            font=ctk.CTkFont(size=11),
+            text_color=self.colors["text_light"],
+        ).pack(anchor="w", padx=25, pady=(0, 10))
+
+        audit_rows = self._get_cached_data(
+            "academic_year_migration_audit",
+            lambda: self.student_service.get_recent_academic_year_migration_audit(8),
+            ttl_seconds=20.0,
+        )
+
+        if not audit_rows:
+            empty_label = ctk.CTkLabel(
+                audit_card,
+                text="Aucune bascule annuelle journalisée pour le moment.",
+                font=ctk.CTkFont(size=11),
+                text_color=self.colors["text_light"],
+            )
+            empty_label.pack(anchor="w", padx=25, pady=(0, 16))
+            return
+
+        body = ctk.CTkScrollableFrame(audit_card, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=20, pady=(0, 14))
+
+        for idx, row_data in enumerate(audit_rows):
+            row = ctk.CTkFrame(body, fg_color=self.colors["hover"], corner_radius=8)
+            row.pack(fill="x", pady=4)
+            # Avoid styling if not present to prevent crashes
+            try:
+                self._style_table_row(row, idx, enable_hover=False)
+            except Exception:
+                pass
+
+            created_at = row_data.get("created_at")
+            created_text = created_at.strftime("%Y-%m-%d %H:%M") if hasattr(created_at, "strftime") else str(created_at or "-")
+            src_name = row_data.get("from_year_name") or f"ID {row_data.get('from_academic_year_id')}"
+            dst_name = row_data.get("to_year_name") or f"ID {row_data.get('to_academic_year_id')}"
+            actor = row_data.get("actor_identifier") or "super_admin"
+            moved = int(row_data.get("moved_count") or 0)
+            regenerated = int(row_data.get("regenerated_full_count") or 0)
+            eligible_only = bool(row_data.get("eligible_only"))
+
+            ctk.CTkLabel(
+                row,
+                text=f"{created_text} • {actor}",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=self.colors["text_dark"],
+            ).pack(anchor="w", padx=12, pady=(10, 2))
+
+            ctk.CTkLabel(
+                row,
+                text=(
+                    f"{src_name} → {dst_name} | migrés: {moved} | "
+                    f"codes FULL régénérés: {regenerated} | filtre éligibles: {'oui' if eligible_only else 'non'}"
+                ),
+                font=ctk.CTkFont(size=10),
+                text_color=self.colors["text_light"],
+                justify="left",
+                wraplength=max(300, self.screen_width - 240),
+            ).pack(anchor="w", padx=12, pady=(0, 10))
+
+    def _open_bulk_academic_year_migration_dialog(self):
+        """Super Admin : bascule en lot des étudiants d'une année vers une autre."""
+        if not self.is_super_admin:
+            self._handle_forbidden_view("academic_years")
+            return
+
+        years = self.academic_year_service.get_years_financials() or self.academic_year_service.get_years() or []
+        if not years:
+            messagebox.showerror("Erreur", "Aucune année académique disponible.")
+            return
+
+        active_year = self.academic_year_service.get_active_year() or {}
+        active_year_id = active_year.get("academic_year_id")
+
+        year_options = []
+        year_map = {}
+        for y in years:
+            yid = y.get("academic_year_id")
+            yname = y.get("year_name") or y.get("name") or f"Année {yid}"
+            label = f"{yname} (ID:{yid})"
+            year_options.append(label)
+            year_map[label] = yid
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Bascule annuelle (Super Admin)")
+        dialog.geometry("620x390")
+        dialog.resizable(False, False)
+        # Ouverture modale stable (évite le couple grab_set + withdraw animé)
+        try:
+            dialog.transient(self.winfo_toplevel())
+        except Exception:
+            pass
+        self._center_and_show_dialog(dialog)
+        try:
+            dialog.lift()
+            dialog.focus_set()
+            dialog.grab_set()
+        except Exception:
+            pass
+
+        card = ctk.CTkFrame(dialog)
+        card.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ctk.CTkLabel(
+            card,
+            text="🔁 Bascule d'étudiants vers une nouvelle année académique",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=self.colors["text_dark"],
+        ).pack(anchor="w", padx=14, pady=(14, 6))
+
+        ctk.CTkLabel(
+            card,
+            text=(
+                "Réinscription annuelle: met à jour l'année académique, remet les paiements à zéro, "
+                "retire les anciens codes d'accès. Les nouveaux codes seront générés après les nouveaux paiements."
+            ),
+            font=ctk.CTkFont(size=11),
+            text_color=self.colors["text_light"],
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=(0, 10))
+
+        form = ctk.CTkFrame(card, fg_color=self.colors["hover"], corner_radius=10)
+        form.pack(fill="x", padx=14, pady=(0, 10))
+
+        ctk.CTkLabel(form, text="Année source", font=ctk.CTkFont(size=12, weight="bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 4))
+        ctk.CTkLabel(form, text="Année cible", font=ctk.CTkFont(size=12, weight="bold")).grid(row=0, column=1, sticky="w", padx=12, pady=(10, 4))
+
+        from_combo = ctk.CTkComboBox(form, values=year_options, width=260)
+        to_combo = ctk.CTkComboBox(form, values=year_options, width=260)
+        from_combo.grid(row=1, column=0, padx=12, pady=(0, 10), sticky="w")
+        to_combo.grid(row=1, column=1, padx=12, pady=(0, 10), sticky="w")
+
+        if year_options:
+            from_combo.set(year_options[0])
+            to_combo.set(year_options[0])
+
+        if active_year_id is not None:
+            target_label = next((lbl for lbl, yid in year_map.items() if yid == active_year_id), None)
+            if target_label:
+                to_combo.set(target_label)
+
+        eligible_only_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            form,
+            text="Migrer uniquement les étudiants éligibles (recommandé)",
+            variable=eligible_only_var,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 6))
+
+        ctk.CTkLabel(
+            form,
+            text="ℹ️ Après migration, les étudiants sont considérés comme réinscrits: aucun code FULL conservé.",
+            font=ctk.CTkFont(size=10),
+            text_color=self.colors["text_light"],
+            justify="left",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 10))
+
+        info = ctk.CTkLabel(
+            card,
+            text="⚠️ Action sensible : cette opération impacte l'accès examen. Vérifiez source/cible avant validation.",
+            text_color=self.colors["warning"],
+            font=ctk.CTkFont(size=11),
+            justify="left",
+        )
+        info.pack(anchor="w", padx=14, pady=(0, 10))
+
+        btns = ctk.CTkFrame(card, fg_color="transparent")
+        btns.pack(fill="x", padx=14, pady=(0, 12))
+
+        def run_migration():
+            from_label = from_combo.get().strip()
+            to_label = to_combo.get().strip()
+            from_year_id = year_map.get(from_label)
+            to_year_id = year_map.get(to_label)
+
+            if not from_year_id or not to_year_id:
+                messagebox.showerror("Erreur", "Année source/cible invalide.")
+                return
+
+            if int(from_year_id) == int(to_year_id):
+                messagebox.showwarning("Validation", "L'année source et l'année cible sont identiques.")
+                return
+
+            preview = self.student_service.migrate_students_to_academic_year(
+                from_academic_year_id=int(from_year_id),
+                to_academic_year_id=int(to_year_id),
+                eligible_only=bool(eligible_only_var.get()),
+                dry_run=True,
+            )
+            if not preview.get("success"):
+                messagebox.showerror("Prévisualisation impossible", preview.get("message", "Erreur de prévisualisation."))
+                return
+
+            to_move = int(preview.get("moved_count") or 0)
+            eligible_count = len(preview.get("eligible_student_ids", []))
+
+            if to_move == 0:
+                messagebox.showinfo("Aucune migration", "Aucun étudiant ne correspond aux critères choisis.")
+                return
+
+            if not messagebox.askyesno(
+                "Confirmation",
+                f"Confirmer la bascule en lot ?\n\nSource: {from_label}\nCible: {to_label}\n\n"
+                f"Filtre éligibles: {'Oui' if eligible_only_var.get() else 'Non'}\n"
+                f"Mode: Réinscription annuelle (paiements/code remis à zéro)\n\n"
+                f"Prévisualisation:\n"
+                f"- Étudiants à migrer: {to_move}\n"
+                f"- Étudiants éligibles concernés: {eligible_count}"
+            ):
+                return
+
+            loading_dialog, loading_indicator = self._show_loading_dialog("Migration annuelle en cours...")
+
+            def worker():
+                result = self.student_service.migrate_students_to_academic_year(
+                    from_academic_year_id=int(from_year_id),
+                    to_academic_year_id=int(to_year_id),
+                    eligible_only=bool(eligible_only_var.get()),
+                    dry_run=False,
+                )
+
+                regenerated = 0
+
+                if result.get("success"):
+                    try:
+                        self.student_service.log_academic_year_migration_audit(
+                            actor_identifier=self.current_user_email or self.current_user.get("username") or "super_admin",
+                            actor_role=self.current_user_role or "super_admin",
+                            from_academic_year_id=int(from_year_id),
+                            to_academic_year_id=int(to_year_id),
+                            eligible_only=bool(eligible_only_var.get()),
+                            moved_student_ids=result.get("moved_student_ids", []),
+                            eligible_student_ids=result.get("eligible_student_ids", []),
+                            regenerated_full_count=regenerated,
+                        )
+                    except Exception as audit_err:
+                        logger.warning(f"Audit logging failed after academic year migration: {audit_err}")
+
+                def finish():
+                    try:
+                        loading_indicator.stop()
+                    except Exception:
+                        pass
+                    try:
+                        loading_dialog.destroy()
+                    except Exception:
+                        pass
+
+                    if not result.get("success"):
+                        messagebox.showerror("Erreur migration", result.get("message", "Échec migration."))
+                        return
+
+                    self._invalidate_view_cache(
+                        "students_all_with_finance",
+                        "academic_years",
+                        "active_academic_year",
+                        "dashboard_snapshot",
+                        "finance_snapshot",
+                        "academic_year_migration_audit",
+                    )
+                    self._schedule_heavy_views_prefetch(delay_ms=250)
+
+                    messagebox.showinfo(
+                        "Migration terminée",
+                        f"Étudiants migrés: {result.get('moved_count', 0)}\n"
+                        f"Éligibles migrés: {len(result.get('eligible_student_ids', []))}\n"
+                        "Codes d'accès conservés: 0 (réinscription annuelle)"
+                    )
+
+                    dialog.destroy()
+                    self._run_with_loading(self._show_academic_years)
+
+                self.after(0, finish)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        ctk.CTkButton(
+            btns,
+            text="Annuler",
+            fg_color=self.colors["border"],
+            text_color=self.colors["text_dark"],
+            hover_color=self.colors["hover"],
+            width=130,
+            command=dialog.destroy,
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            btns,
+            text="Valider la bascule",
+            fg_color=self.colors["primary"],
+            hover_color="#2563eb",
+            text_color=self.colors["text_white"],
+            width=180,
+            command=run_migration,
+        ).pack(side="right")
+
+    def _safe_open_bulk_academic_year_migration_dialog(self):
+        """Ouvre le dialog de bascule avec protection anti-crash globale."""
+        if self._migration_dialog_opening:
+            return
+
+        self._migration_dialog_opening = True
+        try:
+            self._open_bulk_academic_year_migration_dialog()
+        except Exception as e:
+            logger.error(f"Failed to open bulk migration dialog: {e}", exc_info=True)
+            try:
+                messagebox.showerror(
+                    "Erreur",
+                    "Impossible d'ouvrir la fenêtre de bascule des étudiants.\n"
+                    "Veuillez réessayer ou contacter l'administrateur.",
+                )
+            except Exception:
+                pass
+        finally:
+            self._migration_dialog_opening = False
     
     def _update_thresholds(self, new_threshold_str, new_fee_str, academic_year_id):
         """Met à jour les seuils financiers et notifie tous les étudiants"""
@@ -8347,10 +8991,19 @@ class AdminDashboard(ctk.CTkFrame):
     
     def _on_language_change(self, value):
         """Change la langue"""
+        if self._ui_rebuild_in_progress:
+            return
+
+        if value == self.selected_language:
+            return
+
+        self._ui_rebuild_in_progress = True
+        self._view_switch_in_progress = True
         self.selected_language = value
         self.translator.set_language(value)
         set_current_language(value)
         self._persist_ui_context(language=value, view=self.current_view)
+        self._show_loading_overlay("Application de la langue...")
         self._recreate_ui()
         logger.info(f"Langue changée à: {value}")
     

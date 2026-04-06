@@ -1,4 +1,5 @@
 """Service de gestion des étudiants"""
+import json
 import logging
 import re
 from decimal import Decimal
@@ -30,6 +31,113 @@ class StudentService:
         except Exception as e:
             logger.error(f"Error fetching columns for {table_name}: {e}")
             return set()
+
+    def _ensure_academic_year_migration_audit_table(self) -> None:
+        """Crée la table d'audit des bascules annuelles si nécessaire."""
+        try:
+            query = """
+                CREATE TABLE IF NOT EXISTS academic_year_migration_audit (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    actor_identifier VARCHAR(255) DEFAULT NULL,
+                    actor_role VARCHAR(50) DEFAULT NULL,
+                    from_academic_year_id INT NOT NULL,
+                    to_academic_year_id INT NOT NULL,
+                    eligible_only BOOLEAN DEFAULT FALSE,
+                    moved_count INT DEFAULT 0,
+                    eligible_count INT DEFAULT 0,
+                    regenerated_full_count INT DEFAULT 0,
+                    moved_student_ids_json LONGTEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_created_at (created_at),
+                    INDEX idx_from_year (from_academic_year_id),
+                    INDEX idx_to_year (to_academic_year_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """
+            self.db.execute_update(query)
+        except Exception as e:
+            logger.error(f"Error ensuring academic_year_migration_audit table: {e}")
+
+    def log_academic_year_migration_audit(
+        self,
+        *,
+        actor_identifier: str,
+        actor_role: str,
+        from_academic_year_id: int,
+        to_academic_year_id: int,
+        eligible_only: bool,
+        moved_student_ids: list,
+        eligible_student_ids: list = None,
+        regenerated_full_count: int = 0,
+    ) -> bool:
+        """Journalise une bascule annuelle effectuée par un Super Admin."""
+        try:
+            self._ensure_academic_year_migration_audit_table()
+            moved_student_ids = [int(x) for x in (moved_student_ids or [])]
+            eligible_student_ids = [int(x) for x in (eligible_student_ids or [])]
+            payload = json.dumps(moved_student_ids, ensure_ascii=False)
+
+            query = """
+                INSERT INTO academic_year_migration_audit (
+                    actor_identifier,
+                    actor_role,
+                    from_academic_year_id,
+                    to_academic_year_id,
+                    eligible_only,
+                    moved_count,
+                    eligible_count,
+                    regenerated_full_count,
+                    moved_student_ids_json
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            self.db.execute_update(
+                query,
+                (
+                    (actor_identifier or None),
+                    (actor_role or None),
+                    int(from_academic_year_id),
+                    int(to_academic_year_id),
+                    1 if eligible_only else 0,
+                    len(moved_student_ids),
+                    len(eligible_student_ids),
+                    int(regenerated_full_count or 0),
+                    payload,
+                ),
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error logging academic year migration audit: {e}", exc_info=True)
+            return False
+
+    def get_recent_academic_year_migration_audit(self, limit: int = 20) -> List[dict]:
+        """Retourne les dernières bascules annuelles journalisées."""
+        try:
+            self._ensure_academic_year_migration_audit_table()
+            safe_limit = max(1, min(int(limit), 100))
+            query = f"""
+                SELECT
+                    a.id,
+                    a.actor_identifier,
+                    a.actor_role,
+                    a.from_academic_year_id,
+                    a.to_academic_year_id,
+                    a.eligible_only,
+                    a.moved_count,
+                    a.eligible_count,
+                    a.regenerated_full_count,
+                    a.moved_student_ids_json,
+                    a.created_at,
+                    src.year_name AS from_year_name,
+                    dst.year_name AS to_year_name
+                FROM academic_year_migration_audit a
+                LEFT JOIN academic_year src ON src.academic_year_id = a.from_academic_year_id
+                LEFT JOIN academic_year dst ON dst.academic_year_id = a.to_academic_year_id
+                ORDER BY a.created_at DESC, a.id DESC
+                LIMIT {safe_limit}
+            """
+            return self.db.execute_query(query) or []
+        except Exception as e:
+            logger.error(f"Error fetching academic year migration audit: {e}")
+            return []
     
     def create_student(self, student: Student) -> bool:
         """Crée un nouvel étudiant"""
@@ -589,3 +697,216 @@ class StudentService:
         except Exception as e:
             logger.error(f"Error finding promotion by input: {e}")
             return []
+
+    def migrate_students_to_academic_year(
+        self,
+        from_academic_year_id: int,
+        to_academic_year_id: int,
+        eligible_only: bool = False,
+        dry_run: bool = False,
+    ) -> dict:
+        """Bascule en lot des étudiants d'une année académique vers une autre.
+
+        Met à jour :
+        - student.academic_year_id
+        - finance_profile.academic_year_id (si profil existant)
+
+        Args:
+            from_academic_year_id: année source
+            to_academic_year_id: année cible
+            eligible_only: si True, ne migre que les étudiants avec fp.is_eligible = 1
+            dry_run: si True, calcule uniquement l'impact sans écrire en base
+
+        Returns:
+            dict avec compteurs et ids migrés.
+        """
+        try:
+            if not from_academic_year_id or not to_academic_year_id:
+                return {
+                    "success": False,
+                    "message": "Année source/cible invalide.",
+                    "moved_count": 0,
+                    "moved_student_ids": [],
+                    "eligible_student_ids": [],
+                }
+
+            if int(from_academic_year_id) == int(to_academic_year_id):
+                return {
+                    "success": False,
+                    "message": "L'année source et l'année cible sont identiques.",
+                    "moved_count": 0,
+                    "moved_student_ids": [],
+                    "eligible_student_ids": [],
+                }
+
+            filters = [
+                "COALESCE(s.is_active, 1) = 1",
+                "s.academic_year_id = %s",
+            ]
+            params = [from_academic_year_id]
+
+            if eligible_only:
+                filters.append("COALESCE(fp.is_eligible, 0) = 1")
+
+            query_candidates = f"""
+                SELECT
+                    s.id,
+                    COALESCE(fp.is_eligible, 0) AS is_eligible
+                FROM student s
+                LEFT JOIN finance_profile fp ON fp.student_id = s.id
+                WHERE {' AND '.join(filters)}
+                ORDER BY s.id
+            """
+            candidates = self.db.execute_query(query_candidates, tuple(params)) or []
+
+            if not candidates:
+                return {
+                    "success": True,
+                    "message": "Aucun étudiant à migrer.",
+                    "moved_count": 0,
+                    "moved_student_ids": [],
+                    "eligible_student_ids": [],
+                    "dry_run": bool(dry_run),
+                }
+
+            moved_student_ids = [int(r["id"]) for r in candidates if r.get("id") is not None]
+            eligible_student_ids = [int(r["id"]) for r in candidates if int(r.get("is_eligible") or 0) == 1]
+
+            if dry_run:
+                return {
+                    "success": True,
+                    "message": "Prévisualisation calculée.",
+                    "moved_count": len(moved_student_ids),
+                    "moved_student_ids": moved_student_ids,
+                    "eligible_student_ids": eligible_student_ids,
+                    "dry_run": True,
+                }
+
+            # Écriture transactionnelle en lots pour rester rapide et sûre
+            finance_cols = self._get_table_columns("finance_profile")
+            has_fp = bool(finance_cols)
+            student_cols = self._get_table_columns("student")
+            has_student_updated = "updated_at" in student_cols
+
+            connection = self.db.get_connection()
+            cursor = connection.cursor()
+            try:
+                connection.start_transaction()
+                chunk_size = 500
+
+                for i in range(0, len(moved_student_ids), chunk_size):
+                    chunk = moved_student_ids[i:i + chunk_size]
+                    placeholders = ",".join(["%s"] * len(chunk))
+
+                    if has_student_updated:
+                        query_update_students = f"""
+                            UPDATE student
+                            SET academic_year_id = %s,
+                                updated_at = NOW()
+                            WHERE id IN ({placeholders})
+                        """
+                        cursor.execute(query_update_students, (to_academic_year_id, *chunk))
+                    else:
+                        query_update_students = f"""
+                            UPDATE student
+                            SET academic_year_id = %s
+                            WHERE id IN ({placeholders})
+                        """
+                        cursor.execute(query_update_students, (to_academic_year_id, *chunk))
+
+                    if has_fp:
+                        # Réinscription réelle: remettre la situation financière à zéro
+                        # et recalculer seuil/frais depuis la promotion courante.
+                        set_parts = ["fp.academic_year_id = %s"]
+                        params = [to_academic_year_id]
+
+                        if "amount_paid" in finance_cols:
+                            set_parts.append("fp.amount_paid = 0")
+                        if "is_eligible" in finance_cols:
+                            set_parts.append("fp.is_eligible = 0")
+                        if "last_payment_date" in finance_cols:
+                            set_parts.append("fp.last_payment_date = NULL")
+                        if "threshold_required" in finance_cols:
+                            set_parts.append("fp.threshold_required = COALESCE(p.threshold_amount, 0)")
+                        if "final_fee" in finance_cols:
+                            set_parts.append("fp.final_fee = COALESCE(p.fee_usd, 0)")
+
+                        # Invalider toute trace d'ancien code côté profil
+                        if "access_code_type" in finance_cols:
+                            set_parts.append("fp.access_code_type = NULL")
+                        if "access_code_issued_at" in finance_cols:
+                            set_parts.append("fp.access_code_issued_at = NULL")
+                        if "access_code_expires_at" in finance_cols:
+                            set_parts.append("fp.access_code_expires_at = NULL")
+                        if "updated_at" in finance_cols:
+                            set_parts.append("fp.updated_at = NOW()")
+
+                        query_update_finance = f"""
+                            UPDATE finance_profile fp
+                            JOIN student s ON s.id = fp.student_id
+                            LEFT JOIN promotion p ON p.id = s.promotion_id
+                            SET {', '.join(set_parts)}
+                            WHERE fp.student_id IN ({placeholders})
+                        """
+                        cursor.execute(query_update_finance, (*params, *chunk))
+
+                    # Invalider tous les anciens codes d'accès des étudiants migrés.
+                    # Règle métier: année cible = nouvelle inscription => nouveaux paiements => nouveaux codes.
+                    query_delete_codes = f"""
+                        DELETE FROM access_code_history
+                        WHERE student_id IN ({placeholders})
+                    """
+                    cursor.execute(query_delete_codes, tuple(chunk))
+
+                    # Optionnel: supprimer aussi le hash mot de passe dérivé des anciens codes
+                    query_clear_pwd = f"""
+                        UPDATE student
+                        SET password_hash = NULL
+                        WHERE id IN ({placeholders})
+                    """
+                    cursor.execute(query_clear_pwd, tuple(chunk))
+
+                connection.commit()
+            except Exception:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+                try:
+                    if connection and connection.is_connected():
+                        connection.close()
+                except Exception:
+                    pass
+
+            logger.info(
+                "Academic year migration completed: from=%s to=%s moved=%s eligible=%s",
+                from_academic_year_id,
+                to_academic_year_id,
+                len(moved_student_ids),
+                len(eligible_student_ids),
+            )
+
+            return {
+                "success": True,
+                "message": "Migration effectuée.",
+                "moved_count": len(moved_student_ids),
+                "moved_student_ids": moved_student_ids,
+                "eligible_student_ids": eligible_student_ids,
+                "dry_run": False,
+            }
+        except Exception as e:
+            logger.error(f"Error migrating students academic year: {e}", exc_info=True)
+            return {
+                "success": False,
+                "message": f"Erreur migration: {e}",
+                "moved_count": 0,
+                "moved_student_ids": [],
+                "eligible_student_ids": [],
+                "dry_run": bool(dry_run),
+            }

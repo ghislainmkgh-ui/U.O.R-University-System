@@ -2,6 +2,7 @@
 import customtkinter as ctk
 import threading
 import time
+import math
 
 
 class StatCard(ctk.CTkFrame):
@@ -171,19 +172,25 @@ class LoadingIndicator(ctk.CTkFrame):
         super().__init__(parent, fg_color="transparent", **kwargs)
         self.color = color
         self.running = False
+        self._phase = 0
         
         # Frame horizontal pour spinner + texte
         content_frame = ctk.CTkFrame(self, fg_color="transparent")
         content_frame.pack(fill="x", padx=10, pady=5)
         
-        # Spinner simple avec des caractères
-        self.spinner_label = ctk.CTkLabel(
+        # Spinner premium circulaire à points
+        self.spinner_canvas = ctk.CTkCanvas(
             content_frame,
-            text="⠋",
-            font=ctk.CTkFont(size=16),
-            text_color=color
+            width=26,
+            height=26,
+            highlightthickness=0,
+            bd=0,
         )
-        self.spinner_label.pack(side="left", padx=(0, 10))
+        self.spinner_canvas.pack(side="left", padx=(0, 10))
+        try:
+            self.spinner_canvas.configure(bg=self._apply_appearance_mode(self.cget("fg_color")))
+        except Exception:
+            pass
         
         # Texte de statut
         self.status_label = ctk.CTkLabel(
@@ -194,8 +201,10 @@ class LoadingIndicator(ctk.CTkFrame):
         )
         self.status_label.pack(side="left", fill="x", expand=True)
         
-        self.spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-        self.frame_index = 0
+        # Paramètres animation
+        self._dot_count = 8
+        self._radius = 8.5
+        self._base_dot = 2.0
     
     def start(self, text: str = None):
         """Démarre l'animation"""
@@ -207,20 +216,52 @@ class LoadingIndicator(ctk.CTkFrame):
     def stop(self):
         """Arrête l'animation"""
         self.running = False
-        self.frame_index = 0
+        try:
+            self.spinner_canvas.delete("all")
+        except Exception:
+            pass
     
     def set_status(self, text: str):
         """Mets à jour le texte de statut"""
         self.status_label.configure(text=text)
     
     def _animate(self):
-        """Anime le spinner"""
+        """Anime un anneau de points avec effet de rotation fluide"""
         if not self.running:
             return
-        
-        self.spinner_label.configure(text=self.spinner_chars[self.frame_index])
-        self.frame_index = (self.frame_index + 1) % len(self.spinner_chars)
-        self.after(80, self._animate)
+
+        try:
+            self.spinner_canvas.delete("all")
+            cx, cy = 13, 13
+            for i in range(self._dot_count):
+                angle = ((2 * math.pi) / self._dot_count) * i
+                x = cx + self._radius * math.cos(angle)
+                y = cy + self._radius * math.sin(angle)
+
+                # Le point "actif" tourne avec la phase
+                distance = (i - self._phase) % self._dot_count
+                strength = max(0.15, 1.0 - (distance / self._dot_count))
+                dot_r = self._base_dot + (1.8 * strength)
+
+                # Dégradé vers le blanc pour un rendu premium
+                intensity = int(120 + 135 * strength)
+                intensity = max(0, min(255, intensity))
+                color = f"#{intensity:02x}{intensity:02x}ff"
+
+                self.spinner_canvas.create_oval(
+                    x - dot_r,
+                    y - dot_r,
+                    x + dot_r,
+                    y + dot_r,
+                    fill=color,
+                    outline="",
+                )
+
+            self._phase = (self._phase + 1) % self._dot_count
+        except Exception:
+            pass
+
+        self.after(85, self._animate)
 
 
 class ProgressBar(ctk.CTkProgressBar):

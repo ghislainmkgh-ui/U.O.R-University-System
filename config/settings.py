@@ -44,15 +44,43 @@ WHATSAPP_USE_TEMPLATES = os.getenv("WHATSAPP_USE_TEMPLATES", "False").lower() ==
 # Email branding
 EMAIL_LOGO_PATH = os.getenv("EMAIL_LOGO_PATH", "")
 
-# Arduino
-ARDUINO_PORT = os.getenv("ARDUINO_PORT", "COM3")
+# Arduino (OBSOLÈTE — conservé pour rétro-compatibilité)
+ARDUINO_PORT      = os.getenv("ARDUINO_PORT",      "COM3")
 ARDUINO_BAUD_RATE = int(os.getenv("ARDUINO_BAUD_RATE", 9600))
 
-# ESP32 (Wi-Fi Socket)
-ESP32_HOST = os.getenv("ESP32_HOST", "127.0.0.1")
-ESP32_PORT = int(os.getenv("ESP32_PORT", 5050))
-ESP32_SOCKET_TIMEOUT = float(os.getenv("ESP32_SOCKET_TIMEOUT", 1.5))
+# ESP32 (Wi-Fi Socket) — serveur d'accès
+ESP32_HOST              = os.getenv("ESP32_HOST",              "127.0.0.1")
+ESP32_PORT              = int(os.getenv("ESP32_PORT",          5050))
+ESP32_SOCKET_TIMEOUT    = float(os.getenv("ESP32_SOCKET_TIMEOUT", 1.5))
 ESP32_STATUS_REFRESH_MS = int(os.getenv("ESP32_STATUS_REFRESH_MS", 5000))
+
+# Serveur d'accès HTTP (access_server.py)
+ACCESS_SERVER_HOST = os.getenv("ACCESS_SERVER_HOST", "0.0.0.0")
+
+# Caméra IP (nouvelle architecture — remplace ESP32-CAM)
+IP_CAMERA_URL          = os.getenv("IP_CAMERA_URL",          "")   # URL flux RTSP
+IP_CAMERA_SNAPSHOT_URL = os.getenv("IP_CAMERA_SNAPSHOT_URL", "")   # URL snapshot HTTP
+IP_CAMERA_USERNAME     = os.getenv("IP_CAMERA_USERNAME",     "")
+IP_CAMERA_PASSWORD     = os.getenv("IP_CAMERA_PASSWORD",     "")
+CAMERA_DEVICE_ID       = os.getenv("CAMERA_DEVICE_ID",       "")
+
+# Caméra Yi IoT (fallback FTP image locale)
+IP_CAMERA_FTP_ENABLED  = os.getenv("IP_CAMERA_FTP_ENABLED", "False").lower() == "true"
+IP_CAMERA_FTP_HOST     = os.getenv("IP_CAMERA_FTP_HOST", "")
+IP_CAMERA_FTP_PORT     = int(os.getenv("IP_CAMERA_FTP_PORT", 21))
+IP_CAMERA_FTP_PATH     = os.getenv("IP_CAMERA_FTP_PATH", "/tmp/motion.jpg")
+IP_CAMERA_FTP_USERNAME = os.getenv("IP_CAMERA_FTP_USERNAME", "")
+IP_CAMERA_FTP_PASSWORD = os.getenv("IP_CAMERA_FTP_PASSWORD", "")
+
+# Auto-découverte caméra Yi (utile si l'IP change après reboot DHCP)
+IP_CAMERA_AUTO_DISCOVERY_ENABLED = os.getenv("IP_CAMERA_AUTO_DISCOVERY_ENABLED", "False").lower() == "true"
+IP_CAMERA_DISCOVERY_SUBNET       = os.getenv("IP_CAMERA_DISCOVERY_SUBNET", "192.168.1.")
+IP_CAMERA_DISCOVERY_IP_RANGE     = os.getenv("IP_CAMERA_DISCOVERY_IP_RANGE", "1-254")
+IP_CAMERA_DISCOVERY_TIMEOUT      = float(os.getenv("IP_CAMERA_DISCOVERY_TIMEOUT", 0.35))
+IP_CAMERA_DISCOVERY_MAX_WORKERS  = int(os.getenv("IP_CAMERA_DISCOVERY_MAX_WORKERS", 48))
+
+# Reconnaissance faciale
+FACE_RECOGNITION_TOLERANCE = float(os.getenv("FACE_RECOGNITION_TOLERANCE", 0.50))
 
 # Application
 APP_NAME = "U.O.R - Plateforme d'Accès aux Examens"

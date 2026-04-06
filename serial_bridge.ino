@@ -1,3 +1,13 @@
+// [OBSOLÈTE] Pont série Arduino ↔ ESP32-CAM
+// =============================================
+// Ce fichier n'est plus utilisé dans la nouvelle architecture.
+// La communication UART entre Arduino et ESP32-CAM est supprimée.
+// L'ESP32 standard communique directement via Wi-Fi avec le serveur Python.
+// Voir esp32_firmware.py pour le nouveau firmware.
+// =============================================
+
+// Ancien code conservé pour référence uniquement.
+
 #include <SoftwareSerial.h>
 
 SoftwareSerial espSerial(2, 3); // RX, TX

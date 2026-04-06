@@ -1,145 +1,111 @@
-# Système de Contrôle d'Accès Porte ESP32 Cam + Arduino Uno
-# ESP32: Caméra, reconnaissance faciale, logique principale
-# Arduino: LCD, clavier, servo moteur
-# Communication: Liaison série UART
+# Système de Contrôle d'Accès Porte - Nouvelle Architecture
+# ============================================================
+# ESP32 standard (sans caméra intégrée) + Caméra IP + Serveur Python
+#
+# SUPPRIMIÉ (ancienne architecture) :
+#   - Communication UART avec Arduino Uno
+#   - Capture image sur ESP32-CAM (OV2640)
+#   - Reconnaissance faciale embarquée (TensorFlow Lite)
+#
+# NOUVEAU FLUX :
+#   1. Étudiant tape code sur le clavier matriciel
+#   2. ESP32 envoie HTTP POST au serveur Python avec le code
+#   3. Serveur Python :
+#       a. Valide le code en base de données
+#       b. Capture image depuis la caméra IP (RTSP/HTTP snapshot)
+#       c. Reconnaissance faciale (OpenCV + face_recognition)
+#       d. Retourne {"access": "granted|denied"}
+#   4. ESP32 active servo (porte) et LEDs selon réponse
+# ============================================================
 
 import time
 import esp32_hardware
 
-# États du système
-STATE_IDLE = 0
-STATE_PASSWORD = 1
-STATE_FACIAL_RECOGNITION = 2
-STATE_ACCESS_GRANTED = 3
-STATE_ACCESS_DENIED = 4
+CONFIRM_KEY       = '#'
+CANCEL_KEY        = '*'
+MAX_CODE_LEN      = 10
+ENTRY_TIMEOUT_S   = 30   # secondes avant effacement code
+DOOR_OPEN_SECS    = 5    # secondes d'ouverture
+
 
 class DoorAccessSystem:
+    """Système d'accès : clavier → HTTP → serveur Python → caméra IP → visage → porte."""
+
     def __init__(self):
-        # Initialisation du matériel ESP32
         self.hardware = esp32_hardware.esp32_hw
         if not self.hardware.initialize_hardware():
-            print("Erreur initialisation matériel ESP32")
+            print("ERREUR: Impossible d'initialiser le matériel ESP32")
             return
-
-        # Variables système
-        self.current_state = STATE_IDLE
-        self.password_validated = False
-        self.door_open = False
-        self.last_entry_time = 0
-        self.concurrent_users = 0
-
-        # Attendre Arduino
-        time.sleep(2)
-        self.send_to_arduino("STATE:IDLE")
-
-    def send_to_arduino(self, message):
-        """Envoie message à Arduino via liaison série"""
-        return self.hardware.send_to_arduino(message)
-
-    def receive_from_arduino(self):
-        """Reçoit message d'Arduino"""
-        return self.hardware.receive_from_arduino()
-
-    def set_state(self, new_state):
-        """Change état et notifie Arduino"""
-        self.current_state = new_state
-        state_names = {
-            STATE_IDLE: "IDLE",
-            STATE_PASSWORD: "PASSWORD",
-            STATE_FACIAL_RECOGNITION: "FACE",
-            STATE_ACCESS_GRANTED: "GRANTED",
-            STATE_ACCESS_DENIED: "DENIED"
-        }
-        if new_state in state_names:
-            self.send_to_arduino(f"STATE:{state_names[new_state]}")
-
-    def display_message(self, message):
-        """Affiche message sur LCD via Arduino"""
-        self.send_to_arduino(f"MESSAGE:{message}")
+        self.entered_code  = ""
+        self.last_key_time = 0
+        print("Système d'accès U.O.R prêt")
+        print("→ Tapez votre code, puis # pour valider, * pour annuler")
 
     def run(self):
-        """Boucle principale du système"""
-        self.display_message("Systeme Pret")
-
         while True:
-            # Vérifier messages d'Arduino
-            arduino_message = self.receive_from_arduino()
-            if arduino_message:
-                self.handle_arduino_message(arduino_message)
+            # Timeout saisie
+            if self.entered_code and (time.time() - self.last_key_time) > ENTRY_TIMEOUT_S:
+                print("Timeout — code effacé")
+                self.entered_code = ""
+                self.hardware.signal_access_denied()
 
-            # Logique principale selon état
-            if self.current_state == STATE_IDLE:
-                # Attendre début processus
-                time.sleep(0.1)
+            key = self.hardware.read_keypad()
+            if key is None:
+                time.sleep_ms(20)
+                continue
 
-            elif self.current_state == STATE_PASSWORD:
-                # Attendre validation mot de passe d'Arduino
-                pass
+            self.last_key_time = time.time()
+            self._handle_key(key)
 
-            elif self.current_state == STATE_FACIAL_RECOGNITION:
-                # Effectuer reconnaissance faciale
-                self.perform_facial_recognition()
+    def _handle_key(self, key: str):
+        if key == CANCEL_KEY:
+            if self.entered_code:
+                print("Saisie annulée")
+            self.entered_code = ""
+            self.hardware.signal_access_denied()
+            return
 
-            elif self.current_state == STATE_ACCESS_GRANTED:
-                # Accès autorisé - Arduino gère l'ouverture porte
-                time.sleep(5)  # Attendre fermeture porte
-                self.set_state(STATE_IDLE)
+        if key == CONFIRM_KEY:
+            if not self.entered_code:
+                return
+            self._process_code()
+            return
 
-            elif self.current_state == STATE_ACCESS_DENIED:
-                # Accès refusé
-                time.sleep(3)
-                self.set_state(STATE_IDLE)
+        # Touche alphanumérique
+        if len(self.entered_code) < MAX_CODE_LEN:
+            self.entered_code += key
+            print(f"Code: {'*' * len(self.entered_code)}")
+            # Flash vert = touche enregistrée
+            self.hardware.led_green.value(1)
+            time.sleep_ms(60)
+            self.hardware.led_green.value(0)
+        else:
+            print("Code trop long — appuyez * pour effacer")
+            self.hardware.signal_access_denied()
 
-            time.sleep(0.1)
+    def _process_code(self):
+        code = self.entered_code
+        self.entered_code = ""
+        print(f"Code saisi ({len(code)} car.) → envoi au serveur...")
+        self.hardware.signal_processing()
 
-    def handle_arduino_message(self, message):
-        """Traite messages reçus d'Arduino"""
-        if message == "PASSWORD_OK":
-            self.password_validated = True
-            self.set_state(STATE_FACIAL_RECOGNITION)
-        elif message == "PASSWORD_INVALID":
-            self.set_state(STATE_ACCESS_DENIED)
+        result = self.hardware.send_code_to_server(code)
 
-    def perform_facial_recognition(self):
-        """Effectue reconnaissance faciale"""
-        try:
-            # Capturer image
-            self.display_message("Capture Image...")
-            img = self.hardware.capture_image()
+        if result.get("access") == "granted":
+            name       = result.get("name", "Étudiant")
+            confidence = result.get("confidence", 0)
+            print(f"✓ ACCÈS ACCORDÉ — {name}  (confiance: {confidence:.0%})")
+            self.hardware.signal_access_granted()
+            self.hardware.open_door(DOOR_OPEN_SECS)
+            self.hardware.led_green.value(0)
+        else:
+            reason = result.get("reason", "Accès refusé")
+            print(f"✗ ACCÈS REFUSÉ — {reason}")
+            self.hardware.signal_access_denied()
 
-            if img:
-                # Détecter visages
-                self.display_message("Analyse Visage...")
-                faces = self.hardware.detect_faces(img)
+        time.sleep(1)
 
-                if len(faces) == 0:
-                    self.display_message("Aucun Visage")
-                    time.sleep(2)
-                    self.set_state(STATE_ACCESS_DENIED)
-                elif len(faces) > 1:
-                    self.display_message("Trop Visages")
-                    time.sleep(2)
-                    self.set_state(STATE_ACCESS_DENIED)
-                else:
-                    # Reconnaissance visage
-                    self.display_message("Verification...")
-                    recognized = self.hardware.recognize_face(img, [])  # Liste vide pour simulation
 
-                    if recognized and self.password_validated:
-                        self.set_state(STATE_ACCESS_GRANTED)
-                    else:
-                        self.set_state(STATE_ACCESS_DENIED)
-            else:
-                self.display_message("Erreur Camera")
-                time.sleep(2)
-                self.set_state(STATE_ACCESS_DENIED)
-
-        except Exception as e:
-            self.display_message("Erreur Reconnaissance")
-            time.sleep(2)
-            self.set_state(STATE_ACCESS_DENIED)
-
-# Programme principal
 if __name__ == "__main__":
     system = DoorAccessSystem()
     system.run()

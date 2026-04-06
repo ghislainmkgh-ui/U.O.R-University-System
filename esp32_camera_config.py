@@ -1,11 +1,68 @@
-# Configuration optimisée ESP32 CAM - Diagnostic et correction
-# Supporte multiple formats avec fallback automatique
-# MicroPython pour ESP32-CAM (AI-Thinker, TTGO, etc.)
+"""
+Configuration Caméra IP - Nouvelle Architecture
+================================================
+Ce fichier remplace l'ancienne configuration ESP32-CAM (OV2640, MicroPython).
 
-import machine
-import time
-from machine import Pin, I2C
-import esp32
+DANS LA NOUVELLE ARCHITECTURE :
+  - La caméra est une caméra IP séparée (caméra réseau, DroidCam, Hikvision, etc.)
+  - L'image est capturée côté serveur Python (pas sur l'ESP32)
+  - Deux modes : HTTP snapshot (rapide) ou flux RTSP (robuste)
+
+CONFIGURATION :
+  Définir ces variables dans .env :
+    IP_CAMERA_SNAPSHOT_URL=http://192.168.1.50/capture
+    IP_CAMERA_URL=rtsp://admin:pass@192.168.1.50:554/stream1
+    IP_CAMERA_USERNAME=admin
+    IP_CAMERA_PASSWORD=votremotdepasse
+
+EXEMPLES D'URL PAR TYPE DE CAMÉRA :
+  DroidCam (Android)     : http://192.168.x.x:4747/video               (HTTP) 
+  IP Webcam (Android)    : http://192.168.x.x:8080/shot.jpg             (snapshot)
+  Hikvision              : rtsp://admin:pass@192.168.x.x:554/Streaming/Channels/101
+  Dahua                  : rtsp://admin:pass@192.168.x.x:554/cam/realmonitor?channel=1
+  Reolink                : rtsp://admin:pass@192.168.x.x:554/h264Preview_01_main
+  ESP32-CAM (serveur)    : http://192.168.x.x:80/capture               (snapshot)
+
+SERVICE DE CAPTURE :
+  Voir app/services/access/ip_camera_service.py
+"""
+
+# Ce module sert de référence de configuration uniquement.
+# La logique de capture est dans app/services/access/ip_camera_service.py
+
+IP_CAMERA_MODES = {
+    "http_snapshot": "GET snapshot JPEG — rapide (~0.2-1s), recommandé",
+    "rtsp_stream":   "Flux vidéo RTSP via OpenCV — robuste, fallback automatique",
+}
+
+# Toutes les valeurs réelles viennent de config/settings.py (chargé depuis .env)
+from config.settings import (
+    IP_CAMERA_URL,
+    IP_CAMERA_SNAPSHOT_URL,
+    IP_CAMERA_USERNAME,
+    IP_CAMERA_PASSWORD,
+    FACE_RECOGNITION_TOLERANCE,
+)
+
+
+def get_camera_config() -> dict:
+    """Retourne la configuration active de la caméra IP."""
+    return {
+        "snapshot_url":  IP_CAMERA_SNAPSHOT_URL,
+        "rtsp_url":      IP_CAMERA_URL,
+        "username":      IP_CAMERA_USERNAME,
+        "password":      "***" if IP_CAMERA_PASSWORD else "",
+        "face_tolerance": FACE_RECOGNITION_TOLERANCE,
+        "mode":          "snapshot" if IP_CAMERA_SNAPSHOT_URL else "rtsp",
+    }
+
+
+if __name__ == "__main__":
+    config = get_camera_config()
+    print("Configuration Caméra IP active:")
+    for k, v in config.items():
+        print(f"  {k}: {v}")
+
 
 # ============================================================================
 # CONFIGURATION DES FORMATS SUPPORTÉS

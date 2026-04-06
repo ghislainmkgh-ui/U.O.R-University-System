@@ -1,3 +1,12 @@
+// [OBSOLÈTE] Configuration Matérielle Arduino Uno
+// ================================================
+// Ce fichier n'est plus utilisé dans la nouvelle architecture.
+// L'Arduino Uno est remplacé par un ESP32 standard.
+// Voir esp32_firmware.py pour le nouveau firmware.
+// ================================================
+
+// Ancien code conservé pour référence uniquement.
+//
 // Configuration Matérielle Arduino Uno
 // Séparation du code matériel pour meilleure organisation
 

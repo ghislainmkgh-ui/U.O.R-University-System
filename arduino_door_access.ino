@@ -1,3 +1,16 @@
+// [OBSOLÈTE] Système de Contrôle d'Accès Porte ESP32 Cam + Arduino Uno
+// =========================================================================
+// CE FICHIER N'EST PLUS UTILISÉ DANS LA NOUVELLE ARCHITECTURE.
+//
+// NOUVELLE ARCHITECTURE :
+//   - L'Arduino Uno est remplacé par un ESP32 standard
+//   - Le clavier matriciel et le servo sont directement connectés à l'ESP32
+//   - Plus de communication UART entre ESP32 et Arduino
+//   - Voir : esp32_firmware.py (MicroPython) à uploader sur l'ESP32
+// =========================================================================
+
+// Ancien code conservé pour référence uniquement.
+//
 // Système de Contrôle d'Accès Porte ESP32 Cam + Arduino Uno
 // ESP32: Caméra, reconnaissance faciale, logique principale
 // Arduino: LCD, clavier, servo moteur

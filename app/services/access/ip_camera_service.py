@@ -115,27 +115,17 @@ class IPCameraService:
 
     def capture_frame(self) -> np.ndarray | None:
         """
-        Capture une image depuis la caméra IP.
-        Essaie d'abord HTTP snapshot, puis RTSP en fallback.
+        Capture une image depuis la caméra IP en parallèle.
+        Lance snapshot + RTSP + FTP simultanément, utilise le plus rapide.
 
         Retourne : image BGR numpy array, ou None si échec.
         """
-        if self.snapshot_url:
-            frame = self._capture_http_snapshot()
-            if frame is not None:
-                return frame
-            logger.warning("HTTP snapshot échoué — tentative RTSP...")
+        # Première tentative rapide : paralléliser snapshot + RTSP + FTP
+        frame = self._capture_frame_parallel()
+        if frame is not None:
+            return frame
 
-        if self.rtsp_url:
-            frame = self._capture_rtsp_frame()
-            if frame is not None:
-                return frame
-
-        if self.ftp_enabled and self.ftp_host:
-            frame = self._capture_ftp_snapshot()
-            if frame is not None:
-                return frame
-
+        # Deuxième tentative: auto-découverte (plus coûteuse)
         if self.ftp_enabled and self.auto_discovery_enabled:
             discovered_host = self._discover_camera_host_via_ftp(force=True)
             if discovered_host:
@@ -145,6 +135,31 @@ class IPCameraService:
                     return frame
 
         logger.error("Impossible de capturer une image (snapshot, RTSP, FTP indisponibles)")
+        return None
+
+    def _capture_frame_parallel(self) -> np.ndarray | None:
+        """Lance tous les fallbacks en parallèle, utilise le premier qui répond."""
+        tasks = []
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            if self.snapshot_url:
+                tasks.append(("http_snapshot", executor.submit(self._capture_http_snapshot)))
+            if self.rtsp_url:
+                tasks.append(("rtsp", executor.submit(self._capture_rtsp_frame)))
+            if self.ftp_enabled and self.ftp_host:
+                tasks.append(("ftp", executor.submit(self._capture_ftp_snapshot)))
+
+            # Await le premier résultat valide
+            for method_name, future in tasks:
+                try:
+                    frame = future.result(timeout=10)  # timeout généreux par task
+                    if frame is not None:
+                        logger.info(f"Capture caméra réussie via {method_name} (parallèle)")
+                        return frame
+                except Exception as e:
+                    logger.debug(f"Capture {method_name} échouée (parallèle): {e}")
+                    continue
+
         return None
 
     def _infer_camera_host(self) -> str:

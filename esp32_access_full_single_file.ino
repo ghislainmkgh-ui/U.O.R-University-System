@@ -196,11 +196,16 @@ bool connectWiFi() {
 
 String sendCodeToServer(const String& code, int& httpCode) {
   HTTPClient http;
-  http.setTimeout(90000);  // 90s — laisser le temps a la camera + reconnaissance faciale
+  // 200s = 200000ms — largement suffisant pour capture parallèle caméra + reconnaissance faciale
+  http.setTimeout(200000);
   http.begin(SERVER_URL);
   http.addHeader("Content-Type", "application/json");
 
   String payload = "{\"code\":\"" + code + "\"}";
+  
+  // Keep-alive: blink LED vert pendant transmission pour confirmer activité
+  blinkLed(LED_GREEN_PIN, 1, 100);
+  
   httpCode = http.POST(payload);
 
   String body = "";
@@ -220,7 +225,7 @@ void processCode() {
   enteredCode = "";
 
   Serial.printf("Code saisi (%d car.) -> verification serveur\n", code.length());
-  lcdShow("Verification...", "Patientez");
+  lcdShow("Verification...", "Capture camera");
   signalProcessing();
 
   if (WiFi.status() != WL_CONNECTED) {
@@ -232,7 +237,7 @@ void processCode() {
 
   if (httpCode <= 0) {
     Serial.printf("HTTP erreur: %d\n", httpCode);
-    lcdShow("ACCES REFUSE", "Erreur reseau");
+    lcdShow("ACCES REFUSE", "Timeout reseau");
     signalDenied();
     delay(1200);
     lcdShow("Pret", "Code + #");

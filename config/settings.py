@@ -81,6 +81,8 @@ IP_CAMERA_DISCOVERY_MAX_WORKERS  = int(os.getenv("IP_CAMERA_DISCOVERY_MAX_WORKER
 
 # Reconnaissance faciale
 FACE_RECOGNITION_TOLERANCE = float(os.getenv("FACE_RECOGNITION_TOLERANCE", 0.50))
+FACE_CAPTURE_ATTEMPTS = max(1, int(os.getenv("FACE_CAPTURE_ATTEMPTS", 3)))
+FACE_CAPTURE_RETRY_DELAY_MS = max(0, int(os.getenv("FACE_CAPTURE_RETRY_DELAY_MS", 350)))
 
 # Application
 APP_NAME = "U.O.R - Plateforme d'Accès aux Examens"

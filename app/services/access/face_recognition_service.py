@@ -20,6 +20,9 @@ CONFIGURATION :
 """
 
 import logging
+import os
+import re
+from datetime import datetime
 import numpy as np
 import cv2
 
@@ -46,8 +49,10 @@ class FaceRecognitionService:
     """
 
     def __init__(self, tolerance: float = None):
-        from config.settings import FACE_RECOGNITION_TOLERANCE
+        from config.settings import FACE_RECOGNITION_TOLERANCE, LOG_DIR
         self.tolerance = tolerance if tolerance is not None else FACE_RECOGNITION_TOLERANCE
+        self.debug_save_frames = os.getenv("FACE_DEBUG_SAVE_FRAMES", "True").lower() == "true"
+        self.debug_dir = os.getenv("FACE_DEBUG_DIR", os.path.join(LOG_DIR, "face_debug"))
         logger.info(
             f"FaceRecognitionService initialisé — "
             f"tolérance={self.tolerance} "
@@ -89,24 +94,12 @@ class FaceRecognitionService:
         # Convertir BGR → RGB (face_recognition utilise RGB)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Détecter les visages dans la frame
-        face_locations = _fr.face_locations(rgb_frame, model="hog")
-        if not face_locations:
+        # Extraire l'encodage du visage capturé (stratégies robustes)
+        captured_encoding = self._extract_capture_encoding(rgb_frame)
+        if captured_encoding is None:
+            self._save_debug_frame(frame, student, reason="no_face_detected")
             logger.warning("Aucun visage détecté dans la frame de la caméra IP")
             return False, 0.0
-
-        if len(face_locations) > 1:
-            logger.info(f"{len(face_locations)} visages détectés — sélection du plus grand")
-            # Sélectionner le visage avec la plus grande hauteur (top, right, bottom, left)
-            face_locations = [max(face_locations, key=lambda f: f[2] - f[0])]
-
-        # Encoder le visage capturé
-        face_encodings = _fr.face_encodings(rgb_frame, face_locations)
-        if not face_encodings:
-            logger.warning("Encodage du visage détecté impossible")
-            return False, 0.0
-
-        captured_encoding = face_encodings[0]
 
         # Calculer la distance entre visage capturé et référence
         distance   = _fr.face_distance([ref_encoding], captured_encoding)[0]
@@ -117,6 +110,9 @@ class FaceRecognitionService:
             f"Résultat reconnaissance: distance={distance:.3f} / tolérance={self.tolerance} "
             f"→ {'✓ RECONNU' if recognized else '✗ NON RECONNU'}  (confiance={confidence:.2f})"
         )
+
+        if not recognized:
+            self._save_debug_frame(frame, student, reason=f"distance_{distance:.3f}")
 
         return recognized, confidence
 
@@ -165,14 +161,157 @@ class FaceRecognitionService:
         """Retourne l'encodage 128D du visage trouvé dans une image BGR."""
         try:
             rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-            locations = _fr.face_locations(rgb, model="hog")
+            locations = self._detect_faces_with_fallback(rgb)
             if not locations:
                 logger.warning(f"Aucun visage trouvé dans la photo de référence ({source})")
                 return None
-            encodings = _fr.face_encodings(rgb, [locations[0]])
+            location = self._largest_face(locations)
+            encodings = _fr.face_encodings(rgb, [location])
             if not encodings:
                 return None
             return encodings[0]
         except Exception as e:
             logger.error(f"Erreur encodage image ({source}): {e}")
             return None
+
+    @staticmethod
+    def _largest_face(face_locations: list[tuple[int, int, int, int]]) -> tuple[int, int, int, int]:
+        """Retourne le visage de plus grande surface (top, right, bottom, left)."""
+        return max(face_locations, key=lambda f: max(1, (f[2] - f[0]) * (f[1] - f[3])))
+
+    def _detect_faces_with_fallback(self, rgb_img: np.ndarray) -> list:
+        """Détection de visage robuste avec plusieurs stratégies légères."""
+        # 1) Détection standard
+        locations = _fr.face_locations(rgb_img, model="hog")
+        if locations:
+            return locations
+
+        # 2) Détection avec upsample
+        locations = _fr.face_locations(rgb_img, number_of_times_to_upsample=1, model="hog")
+        if locations:
+            logger.info("Visage détecté après upsample x1")
+            return locations
+
+        # 3) Amélioration contraste (CLAHE) + upsample
+        try:
+            gray = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
+            enhanced_rgb = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2RGB)
+            locations = _fr.face_locations(enhanced_rgb, number_of_times_to_upsample=1, model="hog")
+            if locations:
+                logger.info("Visage détecté après CLAHE + upsample")
+                return locations
+        except Exception as e:
+            logger.debug(f"Fallback CLAHE échoué: {e}")
+
+        # 4) Agrandissement image (utile pour visage trop petit)
+        try:
+            h, w = rgb_img.shape[:2]
+            if min(h, w) < 900:
+                scaled = cv2.resize(rgb_img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+                locations = _fr.face_locations(scaled, number_of_times_to_upsample=1, model="hog")
+                if locations:
+                    logger.info("Visage détecté après resize x1.5")
+                    # Ramener les coordonnées à l'échelle originale
+                    normalized = []
+                    for top, right, bottom, left in locations:
+                        normalized.append((int(top / 1.5), int(right / 1.5), int(bottom / 1.5), int(left / 1.5)))
+                    return normalized
+        except Exception as e:
+            logger.debug(f"Fallback resize échoué: {e}")
+
+        return []
+
+    def _extract_capture_encoding(self, rgb_img: np.ndarray) -> np.ndarray | None:
+        """Retourne un encodage visage depuis l'image live via plusieurs variantes."""
+        candidates: list[tuple[str, np.ndarray]] = [("original", rgb_img)]
+
+        # Contraste local (utile en faible éclairage)
+        try:
+            gray = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
+            candidates.append(("clahe", cv2.cvtColor(enhanced, cv2.COLOR_GRAY2RGB)))
+        except Exception as e:
+            logger.debug(f"Prétraitement CLAHE impossible: {e}")
+
+        # Zoom léger pour visage potentiellement petit
+        try:
+            h, w = rgb_img.shape[:2]
+            if min(h, w) < 900:
+                candidates.append(("zoom_x1.5", cv2.resize(rgb_img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)))
+        except Exception as e:
+            logger.debug(f"Prétraitement zoom impossible: {e}")
+
+        # Crop central (caméra éloignée, fond trop dominant)
+        try:
+            h, w = rgb_img.shape[:2]
+            top = int(h * 0.15)
+            bottom = int(h * 0.85)
+            left = int(w * 0.15)
+            right = int(w * 0.85)
+            if bottom > top and right > left:
+                center_crop = rgb_img[top:bottom, left:right]
+                candidates.append(("center_crop", center_crop))
+        except Exception as e:
+            logger.debug(f"Prétraitement center_crop impossible: {e}")
+
+        # Rotations (caméra montée à 90°)
+        try:
+            candidates.append(("rot90_cw", cv2.rotate(rgb_img, cv2.ROTATE_90_CLOCKWISE)))
+            candidates.append(("rot90_ccw", cv2.rotate(rgb_img, cv2.ROTATE_90_COUNTERCLOCKWISE)))
+        except Exception as e:
+            logger.debug(f"Prétraitement rotation impossible: {e}")
+
+        for label, candidate in candidates:
+            for upsample in (0, 1):
+                try:
+                    locations = _fr.face_locations(
+                        candidate,
+                        number_of_times_to_upsample=upsample,
+                        model="hog",
+                    )
+                except Exception as e:
+                    logger.debug(f"Détection échouée ({label}, upsample={upsample}): {e}")
+                    continue
+
+                if not locations:
+                    continue
+
+                if len(locations) > 1:
+                    locations = [self._largest_face(locations)]
+
+                try:
+                    encodings = _fr.face_encodings(candidate, locations)
+                    if encodings:
+                        logger.info(f"Visage live détecté via stratégie '{label}' (upsample={upsample})")
+                        return encodings[0]
+                except Exception as e:
+                    logger.debug(f"Encodage échoué ({label}, upsample={upsample}): {e}")
+
+        return None
+
+    def _save_debug_frame(self, frame_bgr: np.ndarray, student: dict, reason: str) -> None:
+        """Sauvegarde l'image live en debug lorsqu'une reconnaissance échoue."""
+        if not self.debug_save_frames:
+            return
+
+        try:
+            os.makedirs(self.debug_dir, exist_ok=True)
+
+            student_id = str(student.get("id", "unknown"))
+            fullname = f"{student.get('firstname', '')}_{student.get('lastname', '')}".strip("_")
+            fullname = re.sub(r"[^A-Za-z0-9_\-]", "", fullname) or "unknown"
+            safe_reason = re.sub(r"[^A-Za-z0-9_\-\.]", "", str(reason or "failed"))
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+            filename = f"face_fail_{student_id}_{fullname}_{safe_reason}_{ts}.jpg"
+            path = os.path.join(self.debug_dir, filename)
+            ok = cv2.imwrite(path, frame_bgr)
+            if ok:
+                logger.info(f"Debug frame sauvegardée: {path}")
+            else:
+                logger.warning("Échec sauvegarde debug frame (cv2.imwrite=false)")
+        except Exception as e:
+            logger.warning(f"Impossible de sauvegarder la debug frame: {e}")

@@ -27,12 +27,18 @@ import os
 import json
 import logging
 import argparse
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Ajouter la racine du projet au path Python
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config.settings import ESP32_PORT, ACCESS_SERVER_HOST
+from config.settings import (
+    ESP32_PORT,
+    ACCESS_SERVER_HOST,
+    FACE_CAPTURE_ATTEMPTS,
+    FACE_CAPTURE_RETRY_DELAY_MS,
+)
 from app.services.access.ip_camera_service import IPCameraService
 from app.services.access.face_recognition_service import FaceRecognitionService
 from core.database.connection import DatabaseConnection
@@ -201,28 +207,59 @@ class AccessRequestHandler(BaseHTTPRequestHandler):
         student_name = f"{student.get('firstname', '')} {student.get('lastname', '')}".strip()
         logger.info(f"Code valide → {student_name} (id={student.get('id')})")
 
-        # 3. Capturer une image depuis la caméra IP
-        logger.info("Capture image caméra IP...")
-        frame = self.camera_service.capture_frame()
-        capture_meta = self.camera_service.get_last_capture_meta()
-        if frame is None:
-            logger.error("Capture caméra IP échouée")
+        # 3-4. Captures multiples + reconnaissance (plus robuste en conditions réelles)
+        best_confidence = 0.0
+        best_capture_meta = {}
+        recognized = False
+        confidence = 0.0
+        had_frame = False
+
+        logger.info(
+            "Lancement reconnaissance faciale pour %s avec %s tentative(s)...",
+            student_name,
+            FACE_CAPTURE_ATTEMPTS,
+        )
+
+        for attempt in range(1, FACE_CAPTURE_ATTEMPTS + 1):
+            logger.info("Capture image caméra IP... tentative %s/%s", attempt, FACE_CAPTURE_ATTEMPTS)
+            frame = self.camera_service.capture_frame()
+            capture_meta = self.camera_service.get_last_capture_meta()
+
+            if capture_meta.get("discovery_message"):
+                logger.info(capture_meta["discovery_message"])
+
+            if frame is None:
+                logger.warning("Capture caméra IP échouée à la tentative %s", attempt)
+            else:
+                had_frame = True
+                recognized, confidence = self.face_service.identify_student(
+                    frame=frame,
+                    student=student,
+                )
+                if confidence >= best_confidence:
+                    best_confidence = float(confidence)
+                    best_capture_meta = dict(capture_meta or {})
+
+                if recognized:
+                    logger.info("Visage reconnu à la tentative %s/%s", attempt, FACE_CAPTURE_ATTEMPTS)
+                    break
+
+            # Petite pause pour laisser l'utilisateur se repositionner
+            if attempt < FACE_CAPTURE_ATTEMPTS and FACE_CAPTURE_RETRY_DELAY_MS > 0:
+                time.sleep(FACE_CAPTURE_RETRY_DELAY_MS / 1000.0)
+
+        if not best_capture_meta:
+            best_capture_meta = capture_meta if 'capture_meta' in locals() else {}
+
+        # Si aucune image exploitable n'a pu être capturée
+        if not had_frame:
+            logger.error("Capture caméra IP échouée sur toutes les tentatives")
             self._send_json(200, {
                 "access": "denied",
                 "reason": "Caméra IP non disponible — réessayez",
-                "camera": capture_meta,
+                "camera": best_capture_meta,
             })
             return
-
-        if capture_meta.get("discovery_message"):
-            logger.info(capture_meta["discovery_message"])
-
-        # 4. Reconnaissance faciale
-        logger.info(f"Lancement reconnaissance faciale pour {student_name}...")
-        recognized, confidence = self.face_service.identify_student(
-            frame=frame,
-            student=student,
-        )
 
         # 5. Retourner résultat
         if recognized:
@@ -231,15 +268,18 @@ class AccessRequestHandler(BaseHTTPRequestHandler):
                 "access":     "granted",
                 "name":       student_name,
                 "confidence": round(confidence, 3),
-                "camera":     capture_meta,
+                "camera":     best_capture_meta,
             })
         else:
-            logger.warning(f"✗ Visage NON reconnu pour {student_name} (confiance {confidence:.2f})")
+            logger.warning(
+                f"✗ Visage NON reconnu pour {student_name} "
+                f"(meilleure confiance {best_confidence:.2f} après {FACE_CAPTURE_ATTEMPTS} tentative(s))"
+            )
             self._send_json(200, {
                 "access": "denied",
                 "reason": "Visage non reconnu",
                 "name":   student_name,
-                "camera": capture_meta,
+                "camera": best_capture_meta,
             })
 
 

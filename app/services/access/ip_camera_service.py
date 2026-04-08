@@ -139,28 +139,48 @@ class IPCameraService:
 
     def _capture_frame_parallel(self) -> np.ndarray | None:
         """Lance tous les fallbacks en parallèle, utilise le premier qui répond."""
-        tasks = []
-
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {}
+        executor = ThreadPoolExecutor(max_workers=3)
+        try:
             if self.snapshot_url:
-                tasks.append(("http_snapshot", executor.submit(self._capture_http_snapshot)))
-            if self.rtsp_url:
-                tasks.append(("rtsp", executor.submit(self._capture_rtsp_frame)))
-            if self.ftp_enabled and self.ftp_host:
-                tasks.append(("ftp", executor.submit(self._capture_ftp_snapshot)))
+                futures[executor.submit(self._capture_http_snapshot)] = "http_snapshot"
 
-            # Await le premier résultat valide
-            for method_name, future in tasks:
+            # Quand FTP est configuré et fonctionnel, RTSP est souvent le plus lent/inutile.
+            should_try_rtsp = bool(self.rtsp_url) and not (self.ftp_enabled and self.ftp_host)
+            if should_try_rtsp:
+                futures[executor.submit(self._capture_rtsp_frame)] = "rtsp"
+
+            if self.ftp_enabled and self.ftp_host:
+                futures[executor.submit(self._capture_ftp_snapshot)] = "ftp"
+
+            if not futures:
+                return None
+
+            for future in as_completed(futures, timeout=12):
+                method_name = futures[future]
                 try:
-                    frame = future.result(timeout=10)  # timeout généreux par task
-                    if frame is not None:
-                        logger.info(f"Capture caméra réussie via {method_name} (parallèle)")
-                        return frame
+                    frame = future.result()
                 except Exception as e:
                     logger.debug(f"Capture {method_name} échouée (parallèle): {e}")
                     continue
 
-        return None
+                if frame is not None:
+                    # Annule les tâches restantes sans attendre les plus lentes.
+                    for other in futures:
+                        if other is not future:
+                            other.cancel()
+                    logger.info(f"Capture caméra réussie via {method_name} (parallèle)")
+                    return frame
+
+            return None
+        except Exception as e:
+            logger.debug(f"Capture parallèle: timeout/erreur globale: {e}")
+            return None
+        finally:
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
 
     def _infer_camera_host(self) -> str:
         """Déduit l'hôte caméra à partir de snapshot_url ou rtsp_url si possible."""

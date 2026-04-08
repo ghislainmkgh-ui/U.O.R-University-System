@@ -74,6 +74,8 @@ const int MAX_CODE_LEN = 10;
 // UTILITAIRES LCD / LED
 // ============================================================
 void lcdShow(const String& line1, const String& line2) {
+  // Keepalive backlight: certains modules I2C perdent l'état après bruit/alim instable
+  lcd.backlight();
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print(line1.substring(0, LCD_COLS));
@@ -195,25 +197,41 @@ bool connectWiFi() {
 }
 
 String sendCodeToServer(const String& code, int& httpCode) {
-  HTTPClient http;
-  // 200s = 200000ms — largement suffisant pour capture parallèle caméra + reconnaissance faciale
-  http.setTimeout(200000);
-  http.begin(SERVER_URL);
-  http.addHeader("Content-Type", "application/json");
-
   String payload = "{\"code\":\"" + code + "\"}";
-  
-  // Keep-alive: blink LED vert pendant transmission pour confirmer activité
-  blinkLed(LED_GREEN_PIN, 1, 100);
-  
-  httpCode = http.POST(payload);
-
   String body = "";
-  if (httpCode > 0) {
-    body = http.getString();
+  httpCode = -1;
+
+  // Réduit les faux -11: 2 tentatives POST avec nouveau client TCP à chaque fois
+  for (int attempt = 1; attempt <= 2; attempt++) {
+    WiFiClient client;
+    HTTPClient http;
+    http.setConnectTimeout(10000); // timeout de connexion TCP
+    http.setTimeout(200000);       // timeout lecture réponse HTTP
+
+    if (!http.begin(client, SERVER_URL)) {
+      Serial.println("HTTP begin() failed");
+      httpCode = -4;
+      delay(250);
+      continue;
+    }
+
+    http.addHeader("Content-Type", "application/json");
+
+    // Keep-alive: blink LED vert pendant transmission pour confirmer activité
+    blinkLed(LED_GREEN_PIN, 1, 100);
+    httpCode = http.POST(payload);
+
+    if (httpCode > 0) {
+      body = http.getString();
+      http.end();
+      return body;
+    }
+
+    Serial.printf("POST tentative %d/2 echouee, code=%d\n", attempt, httpCode);
+    http.end();
+    delay(350);
   }
 
-  http.end();
   return body;
 }
 
@@ -229,7 +247,14 @@ void processCode() {
   signalProcessing();
 
   if (WiFi.status() != WL_CONNECTED) {
-    connectWiFi();
+    if (!connectWiFi()) {
+      Serial.println("WiFi indisponible -> pas d'envoi HTTP");
+      lcdShow("ACCES REFUSE", "WiFi indispo");
+      signalDenied();
+      delay(1200);
+      lcdShow("Pret", "Code + #");
+      return;
+    }
   }
 
   int httpCode = -1;
@@ -308,6 +333,9 @@ void handleKey(char key) {
 void setup() {
   Serial.begin(115200);
 
+  // Évite les latences supplémentaires liées au mode économiseur WiFi
+  WiFi.setSleep(false);
+
   pinMode(LED_GREEN_PIN, OUTPUT);
   pinMode(LED_RED_PIN, OUTPUT);
   digitalWrite(LED_GREEN_PIN, LOW);
@@ -320,6 +348,7 @@ void setup() {
 
   // LCD
   Wire.begin(21, 22);
+  Wire.setClock(100000);
   lcd.init();
   lcd.backlight();
   lcdShow("U.O.R Access", "Demarrage...");
@@ -339,6 +368,13 @@ void setup() {
 }
 
 void loop() {
+  // Keepalive backlight (si module LCD sensible aux chutes de tension)
+  static unsigned long lastBacklightKick = 0;
+  if (millis() - lastBacklightKick > 1500) {
+    lastBacklightKick = millis();
+    lcd.backlight();
+  }
+
   // Timeout de saisie
   if (enteredCode.length() > 0 && (millis() - lastKeyTime) > ENTRY_TIMEOUT_MS) {
     enteredCode = "";

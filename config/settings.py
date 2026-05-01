@@ -27,6 +27,16 @@ EMAIL_SERVICE = os.getenv("EMAIL_SERVICE", "gmail")  # ou autre
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 
+# Validation distante des demandes d'accès (Super Admin via e-mail)
+# Exemple (production): https://admin.uor.example.com
+ACCESS_APPROVAL_BASE_URL = os.getenv("ACCESS_APPROVAL_BASE_URL", "")
+ACCESS_APPROVAL_TOKEN_TTL_HOURS = int(os.getenv("ACCESS_APPROVAL_TOKEN_TTL_HOURS", 72))
+ACCESS_APPROVAL_TOKEN_SECRET = os.getenv("ACCESS_APPROVAL_TOKEN_SECRET", SECRET_KEY)
+ACCESS_APPROVAL_API_HOST = os.getenv("ACCESS_APPROVAL_API_HOST", "0.0.0.0")
+ACCESS_APPROVAL_API_PORT = int(os.getenv("ACCESS_APPROVAL_API_PORT", 5002))
+ACCESS_APPROVAL_API_DEBUG = os.getenv("ACCESS_APPROVAL_API_DEBUG", "False").lower() == "true"
+ACCESS_APPROVAL_AUTOSTART = os.getenv("ACCESS_APPROVAL_AUTOSTART", "True").lower() == "true"
+
 # WhatsApp (Twilio - legacy)
 WHATSAPP_ACCOUNT_SID = os.getenv("WHATSAPP_ACCOUNT_SID", os.getenv("TWILIO_ACCOUNT_SID", ""))
 WHATSAPP_AUTH_TOKEN = os.getenv("WHATSAPP_AUTH_TOKEN", os.getenv("TWILIO_AUTH_TOKEN", ""))
@@ -58,11 +68,13 @@ ESP32_STATUS_REFRESH_MS = int(os.getenv("ESP32_STATUS_REFRESH_MS", 5000))
 ACCESS_SERVER_HOST = os.getenv("ACCESS_SERVER_HOST", "0.0.0.0")
 
 # Caméra IP (nouvelle architecture — remplace ESP32-CAM)
+IP_CAMERA_TYPE         = os.getenv("IP_CAMERA_TYPE",         "v720")
 IP_CAMERA_URL          = os.getenv("IP_CAMERA_URL",          "")   # URL flux RTSP
 IP_CAMERA_SNAPSHOT_URL = os.getenv("IP_CAMERA_SNAPSHOT_URL", "")   # URL snapshot HTTP
 IP_CAMERA_USERNAME     = os.getenv("IP_CAMERA_USERNAME",     "")
 IP_CAMERA_PASSWORD     = os.getenv("IP_CAMERA_PASSWORD",     "")
 CAMERA_DEVICE_ID       = os.getenv("CAMERA_DEVICE_ID",       "")
+IP_CAMERA_CAPTURE_PRIORITY = os.getenv("IP_CAMERA_CAPTURE_PRIORITY", "snapshot,rtsp,ftp")
 
 # Caméra Yi IoT (fallback FTP image locale)
 IP_CAMERA_FTP_ENABLED  = os.getenv("IP_CAMERA_FTP_ENABLED", "False").lower() == "true"
@@ -78,11 +90,19 @@ IP_CAMERA_DISCOVERY_SUBNET       = os.getenv("IP_CAMERA_DISCOVERY_SUBNET", "192.
 IP_CAMERA_DISCOVERY_IP_RANGE     = os.getenv("IP_CAMERA_DISCOVERY_IP_RANGE", "1-254")
 IP_CAMERA_DISCOVERY_TIMEOUT      = float(os.getenv("IP_CAMERA_DISCOVERY_TIMEOUT", 0.35))
 IP_CAMERA_DISCOVERY_MAX_WORKERS  = int(os.getenv("IP_CAMERA_DISCOVERY_MAX_WORKERS", 48))
+IP_CAMERA_FTP_STALE_THRESHOLD    = max(1, int(os.getenv("IP_CAMERA_FTP_STALE_THRESHOLD", 3)))
+IP_CAMERA_FTP_BYPASS_SEC         = max(3, int(os.getenv("IP_CAMERA_FTP_BYPASS_SEC", 30)))
+IP_CAMERA_FTP_USE_LATEST_JPG     = os.getenv("IP_CAMERA_FTP_USE_LATEST_JPG", "True").lower() == "true"
 
 # Reconnaissance faciale
 FACE_RECOGNITION_TOLERANCE = float(os.getenv("FACE_RECOGNITION_TOLERANCE", 0.50))
 FACE_CAPTURE_ATTEMPTS = max(1, int(os.getenv("FACE_CAPTURE_ATTEMPTS", 3)))
 FACE_CAPTURE_RETRY_DELAY_MS = max(0, int(os.getenv("FACE_CAPTURE_RETRY_DELAY_MS", 350)))
+FACE_REJECT_MULTIPLE_FACES = os.getenv("FACE_REJECT_MULTIPLE_FACES", "True").lower() == "true"
+FACE_MIN_MATCH_SUCCESSES = max(1, int(os.getenv("FACE_MIN_MATCH_SUCCESSES", 3)))
+FACE_MAX_PROCESSING_WIDTH = max(320, int(os.getenv("FACE_MAX_PROCESSING_WIDTH", 640)))
+FACE_REFERENCE_CACHE_TTL_SEC = max(5, int(os.getenv("FACE_REFERENCE_CACHE_TTL_SEC", 300)))
+FACE_ENABLE_CLAHE_FALLBACK = os.getenv("FACE_ENABLE_CLAHE_FALLBACK", "True").lower() == "true"
 
 # Application
 APP_NAME = "U.O.R - Plateforme d'Accès aux Examens"

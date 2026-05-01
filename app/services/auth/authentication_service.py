@@ -1,12 +1,18 @@
 """Service d'authentification principal"""
 import logging
 import secrets
+import hashlib
 from typing import Optional, List, Dict, Tuple
 from core.security.password_hasher import PasswordHasher
 from core.security.validators import Validators
 from core.models.student import Student
 from core.database.connection import DatabaseConnection
 from app.services.integration.notification_service import NotificationService
+from config.settings import (
+    ACCESS_APPROVAL_BASE_URL,
+    ACCESS_APPROVAL_TOKEN_TTL_HOURS,
+    ACCESS_APPROVAL_TOKEN_SECRET,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +28,7 @@ class AuthenticationService:
         self.notification_service = NotificationService()
         self._ensure_administrator_access_columns()
         self._ensure_access_request_table()
+        self._ensure_access_request_token_table()
 
     def get_last_error(self) -> Optional[str]:
         """Retourne le dernier message d'erreur métier/technique."""
@@ -170,6 +177,155 @@ class AuthenticationService:
         except Exception as e:
             logger.error(f"Error ensuring user_access_request table: {e}")
 
+    def _ensure_access_request_token_table(self):
+        """Crée la table des jetons d'approbation email si absente."""
+        try:
+            query = """
+                CREATE TABLE IF NOT EXISTS user_access_request_token (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    request_id INT NOT NULL,
+                    action ENUM('APPROVE', 'REJECT') NOT NULL,
+                    token_hash VARCHAR(128) NOT NULL,
+                    expires_at DATETIME NOT NULL,
+                    used_at DATETIME NULL,
+                    reviewer_identifier VARCHAR(255) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_uart_request (request_id),
+                    INDEX idx_uart_action (action),
+                    INDEX idx_uart_expires (expires_at),
+                    UNIQUE KEY uq_uart_token_hash (token_hash),
+                    CONSTRAINT fk_uart_request FOREIGN KEY (request_id)
+                        REFERENCES user_access_request(id)
+                        ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """
+            self.db.execute_update(query)
+        except Exception as e:
+            logger.error(f"Error ensuring user_access_request_token table: {e}")
+
+    @staticmethod
+    def _normalize_action(action: str) -> Optional[str]:
+        val = (action or "").strip().upper()
+        if val in ("APPROVE", "REJECT"):
+            return val
+        return None
+
+    def _hash_access_approval_token(self, raw_token: str) -> str:
+        """Hash déterministe d'un jeton d'approbation (non stocké en clair)."""
+        secret = ACCESS_APPROVAL_TOKEN_SECRET or "uor-access-approval-secret"
+        payload = f"{secret}:{raw_token}".encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def _invalidate_open_approval_tokens(self, request_id: int):
+        """Invalide les anciens jetons non utilisés d'une demande."""
+        try:
+            self.db.execute_update(
+                """
+                UPDATE user_access_request_token
+                SET used_at = NOW(), reviewer_identifier = %s
+                WHERE request_id = %s AND used_at IS NULL
+                """,
+                ("system:rotated", request_id),
+            )
+        except Exception as e:
+            logger.warning(f"Unable to invalidate old approval tokens for request {request_id}: {e}")
+
+    def _create_access_approval_token(self, request_id: int, action: str) -> Optional[str]:
+        """Crée un jeton one-time pour approuver/rejeter une demande."""
+        try:
+            action = self._normalize_action(action)
+            if not action:
+                return None
+
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = self._hash_access_approval_token(raw_token)
+            ttl_hours = max(1, int(ACCESS_APPROVAL_TOKEN_TTL_HOURS or 72))
+
+            self.db.execute_update(
+                """
+                INSERT INTO user_access_request_token (request_id, action, token_hash, expires_at)
+                VALUES (%s, %s, %s, DATE_ADD(NOW(), INTERVAL %s HOUR))
+                """,
+                (request_id, action, token_hash, ttl_hours),
+            )
+            return raw_token
+        except Exception as e:
+            logger.warning(f"Unable to create approval token for request {request_id}: {e}")
+            return None
+
+    def _build_access_approval_link(self, token: str, action: str) -> Optional[str]:
+        """Construit le lien de décision utilisé dans l'e-mail Super Admin."""
+        base_url = (ACCESS_APPROVAL_BASE_URL or "").strip().rstrip("/")
+        if not base_url:
+            return None
+        action = (action or "").strip().lower()
+        return f"{base_url}/access-request/decision?action={action}&token={token}"
+
+    def process_access_request_token_decision(
+        self,
+        token: str,
+        action: str,
+        reviewer_identifier: str = "super_admin_email",
+    ) -> Tuple[bool, str]:
+        """Traite une décision provenant d'un lien e-mail (one-time token)."""
+        try:
+            token = (token or "").strip()
+            action_norm = self._normalize_action(action)
+
+            if not token:
+                return False, "Jeton manquant"
+            if not action_norm:
+                return False, "Action invalide"
+
+            token_hash = self._hash_access_approval_token(token)
+            rows = self.db.execute_query(
+                """
+                SELECT id, request_id, action, expires_at, used_at
+                FROM user_access_request_token
+                WHERE token_hash = %s
+                LIMIT 1
+                """,
+                (token_hash,),
+            ) or []
+
+            if not rows:
+                return False, "Lien invalide ou expiré"
+
+            tok = rows[0]
+            if str(tok.get("action") or "").upper() != action_norm:
+                return False, "Action non autorisée pour ce lien"
+            if tok.get("used_at"):
+                return False, "Ce lien a déjà été utilisé"
+
+            exp_rows = self.db.execute_query(
+                "SELECT NOW() <= %s AS is_valid",
+                (tok.get("expires_at"),),
+            ) or []
+            if not exp_rows or not bool(exp_rows[0].get("is_valid")):
+                return False, "Lien expiré"
+
+            request_id = int(tok.get("request_id"))
+            if action_norm == "APPROVE":
+                ok, msg = self.approve_access_request(request_id, reviewer_identifier=reviewer_identifier)
+            else:
+                ok, msg = self.reject_access_request(request_id, reviewer_identifier=reviewer_identifier)
+
+            if not ok:
+                return False, msg
+
+            self.db.execute_update(
+                """
+                UPDATE user_access_request_token
+                SET used_at = NOW(), reviewer_identifier = %s
+                WHERE id = %s
+                """,
+                (reviewer_identifier, tok.get("id")),
+            )
+            return True, msg
+        except Exception as e:
+            logger.error(f"Error processing access token decision: {e}")
+            return False, f"Erreur: {str(e)}"
+
     def _resolve_admin_role(self, admin: dict, identifier: str = "") -> str:
         """Détermine le rôle admin final: super_admin ou user."""
         if bool(admin.get("is_super_admin")):
@@ -231,15 +387,66 @@ class AuthenticationService:
             recipients = self._get_super_admin_recipients()
             if not recipients:
                 return
+
+            req_rows = self.db.execute_query(
+                """
+                SELECT id, requested_at
+                FROM user_access_request
+                WHERE LOWER(username) = %s AND LOWER(email) = %s
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                ((username or "").strip().lower(), (email or "").strip().lower()),
+            ) or []
+
+            request_id = req_rows[0].get("id") if req_rows else None
+            requested_at = req_rows[0].get("requested_at") if req_rows else None
+
+            approve_link = None
+            reject_link = None
+            if request_id:
+                self._invalidate_open_approval_tokens(int(request_id))
+                approve_token = self._create_access_approval_token(int(request_id), "APPROVE")
+                reject_token = self._create_access_approval_token(int(request_id), "REJECT")
+                if approve_token:
+                    approve_link = self._build_access_approval_link(approve_token, "approve")
+                if reject_token:
+                    reject_link = self._build_access_approval_link(reject_token, "reject")
+
             subject = "Nouvelle demande d'accès logiciel - U.O.R"
-            body = (
-                "Bonjour Super Admin,\n\n"
-                "Une nouvelle demande d'accès au logiciel a été soumise.\n\n"
-                f"- Username: {username}\n"
-                f"- Email: {email}\n\n"
-                "Veuillez vous connecter au dashboard pour valider ou rejeter cette demande.\n\n"
-                "U.O.R - Système de Contrôle d'Accès"
-            )
+            body_lines = [
+                "Bonjour Super Admin,",
+                "",
+                "Une nouvelle demande d'accès au logiciel a été soumise.",
+                "",
+                f"- Username: {username}",
+                f"- Email: {email}",
+            ]
+
+            if request_id:
+                body_lines.append(f"- Référence demande: #{request_id}")
+            if requested_at:
+                body_lines.append(f"- Date de demande: {requested_at}")
+
+            body_lines.extend(["", "Validation rapide à distance :"])
+
+            if approve_link and reject_link:
+                body_lines.extend([
+                    f"- Valider la demande : {approve_link}",
+                    f"- Rejeter la demande : {reject_link}",
+                    "",
+                    "Ces liens sont à usage unique et expirent automatiquement.",
+                ])
+            else:
+                body_lines.extend([
+                    "- Les liens d'approbation e-mail ne sont pas configurés.",
+                    "- Configurez ACCESS_APPROVAL_BASE_URL pour activer la validation distante.",
+                    "- En attendant, vous pouvez valider/rejeter depuis le dashboard.",
+                ])
+
+            body_lines.extend(["", "U.O.R - Système de Contrôle d'Accès"])
+            body = "\n".join(body_lines)
+
             for recipient in recipients:
                 self.notification_service._send_email(recipient, subject, body)
         except Exception as e:

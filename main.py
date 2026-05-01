@@ -3,7 +3,9 @@ import sys
 import os
 import logging
 import threading
+import subprocess
 from time import perf_counter, sleep
+from urllib.request import urlopen
 
 
 def _ensure_project_venv():
@@ -45,7 +47,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Initialiser le logging
 from config.logger import logger
-from config.settings import APP_NAME, APP_VERSION, DEBUG
+from config.settings import (
+    APP_NAME,
+    APP_VERSION,
+    DEBUG,
+    ACCESS_APPROVAL_API_PORT,
+    ACCESS_APPROVAL_AUTOSTART,
+    ACCESS_APPROVAL_BASE_URL,
+)
 
 logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
 logger.info(f"Debug mode: {DEBUG}")
@@ -327,8 +336,121 @@ try:
                         pass
                 raise
     
+    def _start_access_server_background():
+        """Démarre access_server dans un thread daemon (s'arrête avec l'appli)."""
+        try:
+            from access_server import run_server
+            logger.info("Démarrage du serveur d'accès ESP32 en arrière-plan (port 5050)...")
+            run_server()
+        except Exception as e:
+            logger.error(f"Erreur démarrage access_server: {e}")
+
+    def _is_access_approval_api_healthy(timeout: float = 2.0) -> bool:
+        """Vérifie rapidement si l'API d'approbation e-mail est déjà disponible."""
+        try:
+            url = f"http://127.0.0.1:{int(ACCESS_APPROVAL_API_PORT)}/health"
+            with urlopen(url, timeout=timeout) as resp:
+                return int(getattr(resp, "status", 0) or 0) == 200
+        except Exception:
+            return False
+
+    def _is_access_approval_public_url_healthy(timeout: float = 4.0) -> bool:
+        """Vérifie la disponibilité de l'URL publique d'approbation."""
+        try:
+            base_url = (ACCESS_APPROVAL_BASE_URL or "").strip().rstrip("/")
+            if not base_url:
+                return False
+            with urlopen(f"{base_url}/health", timeout=timeout) as resp:
+                return int(getattr(resp, "status", 0) or 0) == 200
+        except Exception:
+            return False
+
+    def _ensure_access_approval_stack_background():
+        """Démarre la pile API+tunnel d'approbation si elle n'est pas déjà active."""
+        if not ACCESS_APPROVAL_AUTOSTART:
+            logger.info("Auto-start API approbation désactivé (ACCESS_APPROVAL_AUTOSTART=False)")
+            return
+
+        local_ok = _is_access_approval_api_healthy(timeout=1.5)
+        public_ok = _is_access_approval_public_url_healthy(timeout=3.0)
+
+        if local_ok and public_ok:
+            logger.info(
+                "Stack approbation déjà active (local:%s / public:%s)",
+                ACCESS_APPROVAL_API_PORT,
+                ACCESS_APPROVAL_BASE_URL or "n/a",
+            )
+            return
+
+        if local_ok and not public_ok:
+            logger.warning("Tunnel public indisponible: redémarrage auto du tunnel/API")
+        elif not local_ok:
+            logger.warning("API locale indisponible: redémarrage auto du tunnel/API")
+
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        startup_script = os.path.join(project_root, "scripts", "start_access_approval_stack.ps1")
+        if not os.path.exists(startup_script):
+            logger.warning("Script auto-start introuvable: %s", startup_script)
+            return
+
+        try:
+            cmd = [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                startup_script,
+                "-Port",
+                str(int(ACCESS_APPROVAL_API_PORT)),
+            ]
+
+            popen_kwargs = {
+                "cwd": project_root,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+            }
+
+            if os.name == "nt":
+                creationflags = 0
+                if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                    creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP
+                if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    creationflags |= subprocess.CREATE_NO_WINDOW
+                if creationflags:
+                    popen_kwargs["creationflags"] = creationflags
+
+            subprocess.Popen(cmd, **popen_kwargs)
+            logger.info("Auto-start pile approbation déclenché (API+tunnel)")
+
+            for _ in range(24):  # ~12s max
+                if _is_access_approval_api_healthy(timeout=1.5):
+                    logger.info("API approbation active et prête")
+                    return
+                sleep(0.5)
+
+            logger.warning("API approbation non détectée après auto-start (timeout)")
+        except Exception as e:
+            logger.warning(f"Impossible de lancer l'auto-start approbation: {e}")
+
     def main():
         """Lance l'application"""
+        # Démarrer le serveur d'accès ESP32 en arrière-plan
+        server_thread = threading.Thread(
+            target=_start_access_server_background,
+            name="AccessServerThread",
+            daemon=True,
+        )
+        server_thread.start()
+
+        # Démarrer la pile d'approbation email (API+tunnel) en arrière-plan
+        approval_thread = threading.Thread(
+            target=_ensure_access_approval_stack_background,
+            name="AccessApprovalStackThread",
+            daemon=True,
+        )
+        approval_thread.start()
+
         logger.info("Startup pre-mainloop: %.1f ms", (perf_counter() - STARTUP_T0) * 1000)
         app = AppWrapper()
         app.mainloop()

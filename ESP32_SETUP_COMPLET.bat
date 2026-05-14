@@ -1,6 +1,9 @@
 @echo off
 REM =========================================================================
 REM ESP32 CAM - SETUP COMPLET (Windows)
+REM NOTE: Ce script appartient à l'ancienne architecture ESP32 CAM / Arduino.
+REM Il est conservé uniquement pour référence historique et ne fait pas partie
+REM de la migration web actuelle.
 REM Double-clic pour démarrer - Automatise TOUT
 REM =========================================================================
 

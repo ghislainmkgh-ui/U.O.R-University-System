@@ -2,6 +2,10 @@
                     ESP32 CAM - GUIDE COMPLET & FINAL
 ================================================================================
 
+⚠️ NOTE: Ce guide présente l'ancienne architecture ESP32 CAM / Arduino.
+Il s'agit d'une documentation héritée. Cette version n'est pas utilisée dans le travail de migration web actuel.
+Les fichiers sont conservés uniquement pour référence historique.
+
 🎯 OBJECTIF: Configurer l'ESP32 CAM et corriger le problème "JPEG not supported"
 
 ================================================================================

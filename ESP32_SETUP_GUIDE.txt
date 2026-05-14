@@ -2,6 +2,9 @@
                     ESP32 CAM - GUIDE DE CONFIGURATION RAPIDE
 ================================================================================
 
+⚠️ NOTE: Ce guide décrit l'ancienne installation ESP32 CAM / Arduino et n'est pas utilisé dans la migration web actuelle.
+Il est conservé uniquement comme référence historique.
+
 ÉTAPE 1: INSTALLER THONNY IDE
 ──────────────────────────────
 

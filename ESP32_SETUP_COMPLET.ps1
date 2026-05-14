@@ -1,5 +1,8 @@
 #!/usr/bin/env pwsh
 # ESP32 CAM - Setup Complet avec Thonny Integration (PowerShell)
+# NOTE: Ce script appartient à l'ancienne architecture ESP32 CAM / Arduino.
+# Il est conservé uniquement à des fins de documentation historique
+# et ne fait pas partie de la migration web actuelle.
 # À exécuter: powershell -ExecutionPolicy Bypass -File ESP32_SETUP_COMPLET.ps1
 
 $ErrorActionPreference = "Continue"

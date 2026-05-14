@@ -1,4 +1,10 @@
-# Système d'Accès Porte ESP32 + Arduino - Sécurité Multi-Facteurs
+# U.O.R University System — Web Migration
+
+Ce dépôt contient la migration web moderne ainsi que des fichiers hérités du projet desktop et des anciens modules matériels.
+
+> ⚠️ NOTE IMPORTANTE : Les sections `ESP32 CAM`, `Arduino`, `esp32_*` et `arduino_*` sont des éléments historiques. Elles ne font pas partie de la version web actuelle. Elles sont conservées uniquement pour référence.
+
+# Système d'Accès Porte ESP32 + Arduino - Sécurité Multi-Facteurs (Legacy)
 
 Un système de contrôle d'accès porte sécurisé utilisant une architecture distribuée ESP32 Cam + Arduino Uno avec authentification par mot de passe + reconnaissance faciale.
 

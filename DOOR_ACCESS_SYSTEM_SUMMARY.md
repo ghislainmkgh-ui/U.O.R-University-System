@@ -1,5 +1,8 @@
 # Résumé Implémentation Système Accès Porte ESP32 Cam + Arduino Uno
 
+> ⚠️ Ce document décrit l'implémentation hardware legacy ESP32 Cam + Arduino Uno. Il est conservé pour référence historique uniquement.
+> Le développement actuel du projet se fait dans `Web_app_migration` et ne repose pas sur ce matériel.
+
 ## Vue d'ensemble du Projet
 Un système complet de contrôle d'accès porte sécurisé implémenté avec architecture distribuée utilisant ESP32 Cam et Arduino Uno pour authentification multi-facteurs par saisie de mot de passe suivie de reconnaissance faciale.
 

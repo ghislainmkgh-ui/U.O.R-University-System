@@ -1,10 +1,10 @@
 # U.O.R University System — Web Migration
 
-Ce dépôt contient la migration web moderne ainsi que des fichiers hérités du projet desktop et des anciens modules matériels.
+> ⚠️ Note importante : ce dépôt contient le développement Web moderne dans `Web_app_migration`.
+> Les anciens fichiers Arduino / ESP32 CAM / desktop sont conservés uniquement à des fins de documentation historique.
+> Ils ne constituent pas la base du travail Web actuel.
 
-> ⚠️ NOTE IMPORTANTE : Les sections `ESP32 CAM`, `Arduino`, `esp32_*` et `arduino_*` sont des éléments historiques. Elles ne font pas partie de la version web actuelle. Elles sont conservées uniquement pour référence.
-
-# Système d'Accès Porte ESP32 + Arduino - Sécurité Multi-Facteurs (Legacy)
+Le projet Web moderne est en cours dans `Web_app_migration`.
 
 Un système de contrôle d'accès porte sécurisé utilisant une architecture distribuée ESP32 Cam + Arduino Uno avec authentification par mot de passe + reconnaissance faciale.
 

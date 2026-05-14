@@ -2,8 +2,7 @@
                     ESP32 CAM - DIAGNOSTIC ET CORRECTION
 ================================================================================
 
-⚠️ NOTE: Ce guide couvre l'ancienne architecture ESP32 CAM / Arduino et ne fait pas partie de la migration web actuelle.
-Il est maintenu uniquement pour référence et documentation historique.
+> ⚠️ Ce guide est destiné à la documentation legacy sur l'ESP32 CAM. Le projet actuel évolue vers une application Web moderne et n'utilise pas cette architecture matérielle.
 
 PROBLÈME INITIAL:
   "JPEG format is not supported on this sensor" (Error 0x106)

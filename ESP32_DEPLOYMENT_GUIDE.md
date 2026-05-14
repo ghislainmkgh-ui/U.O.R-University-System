@@ -1,5 +1,8 @@
 # Guide de Déploiement Système Accès Porte ESP32 Cam + Arduino Uno
 
+> ⚠️ Attention : ce guide concerne uniquement l'ancienne architecture matérielle ESP32 Cam + Arduino Uno.
+> Le travail actuel du projet se concentre sur la migration Web dans `Web_app_migration`, et cette architecture n'est pas utilisée pour le développement Web cible.
+
 ## Vue d'ensemble
 Ce système fournit un contrôle d'accès porte sécurisé utilisant une architecture distribuée :
 - **ESP32 Cam** : Caméra, reconnaissance faciale, logique principale
